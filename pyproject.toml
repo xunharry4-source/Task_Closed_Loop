@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "task-closed-loop"
+version = "0.21.0"
+description = "Interface-driven closed-loop AI task runtime"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "PyYAML>=6.0,<7",
+    "python-dotenv>=1.0,<2",
+]
+
+[project.optional-dependencies]
+mcp = [
+    "mcp>=2,<3",
+]
+gemini = [
+    "google-genai",
+]
+openai = [
+    "openai>=1,<3",
+]
+http = [
+    "httpx>=0.27,<1",
+]
+google = [
+    "google-api-python-client>=2,<3",
+    "google-auth>=2,<3",
+    "google-auth-oauthlib>=1,<2",
+]
+dev = [
+    "pytest>=8,<9",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+task_closed_loop = [
+    "prompts/*.md",
+]
+

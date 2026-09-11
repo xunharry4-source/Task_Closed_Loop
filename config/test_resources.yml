@@ -1,0 +1,232 @@
+resources:
+- id: us-listed-top31-market-cap-2026-08-29
+  type: us_equity_market_cap_snapshot
+  source_identity: stockanalysis-us-listed-market-cap-ranking
+  availability: available
+  payload:
+    fact: A current snapshot of the 31 largest U.S.-listed stocks by market capitalization
+      is available.
+    as_of_date: '2026-08-29'
+    ranking_scope: NASDAQ, NYSE, and NYSE American listed stocks; private and OTC
+      companies excluded
+    ranking_basis: market_cap_descending
+    source: StockAnalysis - Biggest Companies by Market Cap
+    record_count: 31
+    stocks:
+    - rank: 1
+      ticker: NVDA
+      company: NVIDIA Corporation
+      market_cap_usd: 5.25T
+      stock_price_usd: 217.55
+      daily_change_pct: -4.57
+      revenue_usd: 302.97B
+    - rank: 2
+      ticker: AAPL
+      company: Apple Inc.
+      market_cap_usd: 4.67T
+      stock_price_usd: 319.7
+      daily_change_pct: 1.63
+      revenue_usd: 466.82B
+    - rank: 3
+      ticker: GOOGL
+      company: Alphabet Inc.
+      market_cap_usd: 4.24T
+      stock_price_usd: 346.59
+      daily_change_pct: 1.74
+      revenue_usd: 445.87B
+    - rank: 4
+      ticker: MSFT
+      company: Microsoft Corporation
+      market_cap_usd: 3.81T
+      stock_price_usd: 513.53
+      daily_change_pct: 1.68
+      revenue_usd: 331.84B
+    - rank: 5
+      ticker: AMZN
+      company: Amazon.com, Inc.
+      market_cap_usd: 2.87T
+      stock_price_usd: 266.43
+      daily_change_pct: 3.97
+      revenue_usd: 775.68B
+    - rank: 6
+      ticker: TSM
+      company: Taiwan Semiconductor Manufacturing Company Limited
+      market_cap_usd: 1.98T
+      stock_price_usd: 417.52
+      daily_change_pct: -2.29
+      revenue_usd: 139.57B
+    - rank: 7
+      ticker: SPCX
+      company: Space Exploration Technologies Corp.
+      market_cap_usd: 1.92T
+      stock_price_usd: 141.5
+      daily_change_pct: 0.45
+      revenue_usd: 23.04B
+    - rank: 8
+      ticker: AVGO
+      company: Broadcom Inc.
+      market_cap_usd: 1.75T
+      stock_price_usd: 368.79
+      daily_change_pct: -0.74
+      revenue_usd: 75.47B
+    - rank: 9
+      ticker: META
+      company: Meta Platforms, Inc.
+      market_cap_usd: 1.47T
+      stock_price_usd: 578.02
+      daily_change_pct: 1.21
+      revenue_usd: 228.25B
+    - rank: 10
+      ticker: TSLA
+      company: Tesla, Inc.
+      market_cap_usd: 1.38T
+      stock_price_usd: 348.75
+      daily_change_pct: -1.71
+      revenue_usd: 103.62B
+    - rank: 11
+      ticker: BRK.B
+      company: Berkshire Hathaway Inc.
+      market_cap_usd: 1.08T
+      stock_price_usd: 505.0
+      daily_change_pct: 0.26
+      revenue_usd: 384.69B
+    - rank: 12
+      ticker: MU
+      company: Micron Technology, Inc.
+      market_cap_usd: 1.05T
+      stock_price_usd: 932.86
+      daily_change_pct: -0.27
+      revenue_usd: 90.27B
+    - rank: 13
+      ticker: LLY
+      company: Eli Lilly and Company
+      market_cap_usd: 1.05T
+      stock_price_usd: 1174.61
+      daily_change_pct: -0.13
+      revenue_usd: 79.67B
+    - rank: 14
+      ticker: JPM
+      company: JPMorgan Chase & Co.
+      market_cap_usd: 950.62B
+      stock_price_usd: 357.62
+      daily_change_pct: 0.96
+      revenue_usd: 186.33B
+    - rank: 15
+      ticker: SKHY
+      company: SK hynix Inc.
+      market_cap_usd: 874.17B
+      stock_price_usd: 161.04
+      daily_change_pct: -0.35
+      revenue_usd: 122.16B
+    - rank: 16
+      ticker: WMT
+      company: Walmart Inc.
+      market_cap_usd: 820.40B
+      stock_price_usd: 103.09
+      daily_change_pct: 0.45
+      revenue_usd: 735.84B
+    - rank: 17
+      ticker: AMD
+      company: Advanced Micro Devices, Inc.
+      market_cap_usd: 760.05B
+      stock_price_usd: 465.58
+      daily_change_pct: -2.33
+      revenue_usd: 41.31B
+    - rank: 18
+      ticker: V
+      company: Visa Inc.
+      market_cap_usd: 700.47B
+      stock_price_usd: 381.6
+      daily_change_pct: 0.51
+      revenue_usd: 44.49B
+    - rank: 19
+      ticker: ASML
+      company: ASML Holding N.V.
+      market_cap_usd: 666.04B
+      stock_price_usd: 1696.16
+      daily_change_pct: -2.24
+      revenue_usd: 40.29B
+    - rank: 20
+      ticker: JNJ
+      company: Johnson & Johnson
+      market_cap_usd: 645.95B
+      stock_price_usd: 268.04
+      daily_change_pct: 0.85
+      revenue_usd: 97.93B
+    - rank: 21
+      ticker: XOM
+      company: ExxonMobil Holdings Corporation
+      market_cap_usd: 644.38B
+      stock_price_usd: 156.71
+      daily_change_pct: 0.17
+      revenue_usd: 361.06B
+    - rank: 22
+      ticker: MA
+      company: Mastercard Incorporated
+      market_cap_usd: 521.49B
+      stock_price_usd: 595.3
+      daily_change_pct: 0.6
+      revenue_usd: 35.08B
+    - rank: 23
+      ticker: INTC
+      company: Intel Corporation
+      market_cap_usd: 470.12B
+      stock_price_usd: 89.47
+      daily_change_pct: -2.85
+      revenue_usd: 57.03B
+    - rank: 24
+      ticker: ABBV
+      company: AbbVie Inc.
+      market_cap_usd: 451.46B
+      stock_price_usd: 255.48
+      daily_change_pct: -1.03
+      revenue_usd: 64.39B
+    - rank: 25
+      ticker: PLTR
+      company: Palantir Technologies Inc.
+      market_cap_usd: 447.67B
+      stock_price_usd: 186.29
+      daily_change_pct: 0.19
+      revenue_usd: 6.16B
+    - rank: 26
+      ticker: BAC
+      company: Bank of America Corporation
+      market_cap_usd: 435.79B
+      stock_price_usd: 62.32
+      daily_change_pct: 1.88
+      revenue_usd: 113.93B
+    - rank: 27
+      ticker: ORCL
+      company: Oracle Corporation
+      market_cap_usd: 434.52B
+      stock_price_usd: 150.85
+      daily_change_pct: -0.72
+      revenue_usd: 67.36B
+    - rank: 28
+      ticker: CSCO
+      company: Cisco Systems, Inc.
+      market_cap_usd: 433.28B
+      stock_price_usd: 109.93
+      daily_change_pct: -1.98
+      revenue_usd: 63.33B
+    - rank: 29
+      ticker: COST
+      company: Costco Wholesale Corporation
+      market_cap_usd: 419.30B
+      stock_price_usd: 945.47
+      daily_change_pct: 1.16
+      revenue_usd: 293.59B
+    - rank: 30
+      ticker: CVX
+      company: Chevron Corporation
+      market_cap_usd: 395.97B
+      stock_price_usd: 201.86
+      daily_change_pct: 1.05
+      revenue_usd: 209.38B
+    - rank: 31
+      ticker: KO
+      company: The Coca-Cola Company
+      market_cap_usd: 385.77B
+      stock_price_usd: 89.66
+      daily_change_pct: 0.67
+      revenue_usd: 50.13B

@@ -1,0 +1,20 @@
+# Runtime 核心配置。
+reality:
+  # Current Reality 使用的 Prompt。
+  prompt: src/task_closed_loop/prompts/runtime_prompt.md
+
+task_generation:
+  # Task Generation 输出模板。
+  output_template: src/task_closed_loop/prompts/output_template.md
+
+execution:
+  # 建立 Attempt 前刷新当前 Capability。
+  refresh_capabilities_before_attempt: true
+  # External Effect 保留执行时 Target。
+  preserve_execution_target_on_effect: true
+
+persistence:
+  # 保存 Reality 历史。
+  save_reality_history: true
+  # 保存真实 External Effect。
+  save_execution_effects: true

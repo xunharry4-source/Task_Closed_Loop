@@ -1,0 +1,86 @@
+# ============================================================
+# MCP 外部系统配置
+# ============================================================
+#
+# 正式接入 Gmail、数据库、服务器、第三方系统时，
+# 优先在这里添加 MCP Server。
+#
+# 不需要为每个外部系统编写 Python Adapter。
+#
+# MCP 映射规则：
+#
+#   MCP resources  -> Task Closed-Loop Resource
+#   MCP tools      -> Task Closed-Loop Capability
+#
+# 如果某个 MCP Server 没有 resources，只提供“读取/搜索”工具，
+# 可以在 resource_tools 里声明：
+#
+#   每轮先调用这个只读 Tool，
+#   再把它的返回结果作为 Resource 输入 Reality。
+#
+# 首次使用 MCP 前，在你的本地 Python 环境安装：
+#
+#   pip install "mcp>=2,<3"
+#
+# ============================================================
+
+mcp:
+  servers: {}
+
+# ============================================================
+# Streamable HTTP 示例
+# ============================================================
+#
+# mcp:
+#   servers:
+#     company_system:
+#       enabled: true
+#       transport: streamable_http
+#       url: http://127.0.0.1:8000/mcp
+#
+# ============================================================
+# stdio 示例
+# ============================================================
+#
+# mcp:
+#   servers:
+#     gmail:
+#       enabled: true
+#       transport: stdio
+#       command: npx
+#       args:
+#         - -y
+#         - your-gmail-mcp-server
+#       env:
+#         GOOGLE_命令参数入口ENT_ID: ${GOOGLE_命令参数入口ENT_ID}
+#         GOOGLE_命令参数入口ENT_SECRET: ${GOOGLE_命令参数入口ENT_SECRET}
+#
+# ============================================================
+# Tool 作为 Resource 的示例
+# ============================================================
+#
+# 某些 MCP Server 只暴露 tools，没有 resources。
+# 例如一个 Gmail Server 可能只提供 search_emails。
+#
+# mcp:
+#   servers:
+#     gmail:
+#       enabled: true
+#       transport: stdio
+#       command: npx
+#       args:
+#         - -y
+#         - your-gmail-mcp-server
+#
+#       resource_tools:
+#         - id: recent_inbox
+#           tool: search_emails
+#           resource_type: gmail_messages
+#           arguments:
+#             query: newer_than:1d
+#
+# 这时：
+#
+#   search_emails 的结果 -> Resource recent_inbox
+#   MCP Server 的全部 tools -> Capability
+#

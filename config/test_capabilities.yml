@@ -1,0 +1,15 @@
+capabilities:
+- id: codex
+  description: Use Codex to read and write code, create scripts, process structured
+    data, run programmatic analysis, transform datasets, and produce code-based artifacts
+    inside the available development workspace.
+  action_type: codex
+  principal: local-developer
+  security_domain: local-development
+  availability: available
+  permissions:
+  - read_workspace
+  - write_workspace
+  - execute_code
+  target_scope:
+    type: development_workspace

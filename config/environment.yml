@@ -1,0 +1,32 @@
+environment:
+  dotenv:
+    enabled: true
+    file: .env
+    override_existing_environment: false
+  variables:
+    project.environment: APP_ENV
+    storage.backend: STORAGE_BACKEND
+    storage.sqlite_path: STORAGE_SQLITE_PATH
+    llm.adapter: LLM_ADAPTER
+    llm.model: LLM_MODEL
+    llm.temperature: LLM_TEMPERATURE
+    logging.level: LOG_LEVEL
+    execution.refresh_capabilities_before_attempt: EXECUTION_REFRESH_CAPABILITIES
+    persistence.save_reality_history: SAVE_REALITY_HISTORY
+    persistence.save_execution_effects: SAVE_EXECUTION_EFFECTS
+    diagnostics.enabled: DIAGNOSTICS_ENABLED
+    diagnostics.strategy: DIAGNOSTICS_STRATEGY
+    llm.ollama.base_url: OLLAMA_BASE_URL
+    llm.ollama.timeout_seconds: OLLAMA_TIMEOUT_SECONDS
+    llm.ollama.keep_alive: OLLAMA_KEEP_ALIVE
+    llm.ollama.think: OLLAMA_THINK
+    llm.lmstudio.base_url: LMSTUDIO_BASE_URL
+    llm.lmstudio.timeout_seconds: LMSTUDIO_TIMEOUT_SECONDS
+    llm.lmstudio.max_tokens: LMSTUDIO_MAX_TOKENS
+    llm.lmstudio.api_key: LMSTUDIO_API_KEY
+  secrets:
+    openai_api_key: OPENAI_API_KEY
+    google_application_credentials: GOOGLE_APPLICATION_CREDENTIALS
+    gmail_credentials_json: GMAIL_CREDENTIALS_JSON
+    custom_api_token: CUSTOM_API_TOKEN
+    gemini_api_key: GEMINI_API_KEY

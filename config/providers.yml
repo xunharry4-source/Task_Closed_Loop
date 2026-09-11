@@ -1,0 +1,29 @@
+# ============================================================
+# Provider 配置
+# ============================================================
+#
+# 正式运行：
+#   python start.py
+#
+# 测试 Resource / Capability：
+#   python test_runtime.py
+#
+# test_runtime.py 会在内存中启用 test_config Provider，
+# 正式运行不会加载测试 Resource / Capability。
+#
+# 真实 Gmail / 数据库 / 服务器 / 第三方系统：
+#   config/mcp_servers.yml
+#
+# ============================================================
+
+providers:
+
+  test_config:
+    enabled: false
+    adapter: task_closed_loop.adapters.test_config:TestConfigProvider
+
+  # 高级兼容自定义 Provider 示例：
+  #
+  # legacy_system:
+  #   enabled: true
+  #   adapter: task_closed_loop.adapters.legacy_system:LegacySystemAdapter

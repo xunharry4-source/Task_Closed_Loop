@@ -1,0 +1,22 @@
+# Offline destructive diagnostics
+# Five reviewers inspect the same Diagnostic Snapshot independently.
+# Findings are aggregated after all reviewers finish.
+
+diagnostics:
+  enabled: true
+
+  # Diagnostics remains outside Runtime Core.
+  runtime_integration: false
+
+  # Current review method.
+  strategy: destructive_parallel
+
+  roots:
+    r1_context_scope: true
+    r2_evidence_continuity: true
+    r3_effect_continuity: true
+    r4_execution_context: true
+    r5_information_flow: true
+
+  # Findings can be persisted later through the repository layer.
+  persist_runs: false

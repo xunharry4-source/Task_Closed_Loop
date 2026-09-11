@@ -1,0 +1,49 @@
+# LLM 配置
+# 正式 Runtime 必须显式设置 LLM_ADAPTER 与 LLM_MODEL。
+#
+# 当前支持：
+#   gemini
+#   ollama
+#   lmstudio
+#
+# Gemini:
+#   LLM_ADAPTER=gemini
+#   LLM_MODEL=gemini-3.6-flash
+#
+# Ollama:
+#   LLM_ADAPTER=ollama
+#   LLM_MODEL=<ollama list 中的模型名>
+#
+# LM Studio:
+#   LLM_ADAPTER=lmstudio
+#   LLM_MODEL=<LM Studio /v1/models 返回的模型 id>
+
+llm:
+  adapter: ${LLM_ADAPTER}
+  model: ${LLM_MODEL}
+  temperature: ${LLM_TEMPERATURE:0.0}
+
+  prompt_manifest: src/task_closed_loop/prompts/manifest.yml
+
+  gemini:
+    api_key_env: GEMINI_API_KEY
+
+  ollama:
+    base_url: ${OLLAMA_BASE_URL:http://127.0.0.1:11434}
+    timeout_seconds: ${OLLAMA_TIMEOUT_SECONDS:120}
+    keep_alive: ${OLLAMA_KEEP_ALIVE:5m}
+    think: ${OLLAMA_THINK:false}
+
+  lmstudio:
+    base_url: ${LMSTUDIO_BASE_URL:http://127.0.0.1:1234/v1}
+    timeout_seconds: ${LMSTUDIO_TIMEOUT_SECONDS:120}
+    max_tokens: ${LMSTUDIO_MAX_TOKENS}
+    api_key: ${LMSTUDIO_API_KEY}
+
+  roles:
+    reality_builder: reality_builder
+    existing_task_continuity: existing_task_continuity
+    task_discovery: task_discovery
+    task_candidate_audit: task_candidate_destructive_audit
+    task_candidate_set_audit: task_candidate_set_audit
+    task_reality_validity: task_reality_validity

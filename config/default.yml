@@ -1,0 +1,22 @@
+project:
+  name: task-closed-loop
+  version: 0.21.0
+  environment: ${APP_ENV:development}
+runtime:
+  config_files:
+  - config/environment.yml
+  - config/runtime.yml
+  - config/task_generation.yml
+  - config/llm.yml
+  - config/providers.yml
+  - config/mcp_servers.yml
+  - config/diagnostics.yml
+storage:
+  backend: ${STORAGE_BACKEND:memory}
+  sqlite_path: ${STORAGE_SQLITE_PATH:data/task_closed_loop.db}
+llm:
+  adapter: ${LLM_ADAPTER}
+  model: ${LLM_MODEL}
+  temperature: ${LLM_TEMPERATURE:0.0}
+logging:
+  level: ${LOG_LEVEL:INFO}

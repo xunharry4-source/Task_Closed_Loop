@@ -1,0 +1,25 @@
+prompts:
+  reality_builder:
+    file: reality_builder.md
+    role: build_current_reality
+  existing_task_continuity:
+    file: existing_task_continuity.md
+    role: reconcile_existing_tasks
+  task_discovery:
+    file: task_discovery.md
+    role: discover_task_candidates
+  task_candidate_destructive_audit:
+    file: task_candidate_destructive_audit.md
+    role: review_single_candidate
+  task_candidate_set_audit:
+    file: task_candidate_set_audit.md
+    role: review_candidate_set
+  task_reality_validity:
+    file: task_reality_validity.md
+    role: review_final_task_reality_validity
+  runtime_context:
+    file: runtime_prompt.md
+    role: closed_loop_runtime_context
+  output_template:
+    file: output_template.md
+    role: runtime_output_template
