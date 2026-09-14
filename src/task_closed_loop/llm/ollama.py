@@ -9,9 +9,17 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from task_closed_loop.llm.debug import LLMDebugPrinter
 from task_closed_loop.llm.prompt_registry import PromptRegistry
+from task_closed_loop.llm.prompt_cache import PromptRequestCache
 from task_closed_loop.reality.models import RealitySnapshot
 from task_closed_loop.tasks.generation_models import (
+    CandidateFailureContext,
+    CandidateFieldRepair,
+    CoverageDimension,
+    DiscoverySignal,
+    TaskOutcomeRecord,
+    TaskSeed,
     CandidateReview,
     CandidateSetReview,
     FinalTaskRealityReview,
@@ -174,11 +182,13 @@ class OllamaLLM:
         ),
         roles: dict[str, str] | None = None,
         transport: OllamaTransport | Any | None = None,
+        debugger: LLMDebugPrinter | None = None,
+        prompt_cache: PromptRequestCache | None = None,
     ):
         model = str(model or "").strip()
         if not model:
             raise OllamaConfigurationError(
-                "LLM_MODEL 未配置。"
+                "model 未配置。"
             )
 
         self.model = model
@@ -186,6 +196,12 @@ class OllamaLLM:
         self.keep_alive = str(keep_alive)
         self.think = bool(think)
         self.roles = dict(roles or {})
+        self.debugger = (
+            debugger
+            if debugger is not None
+            else LLMDebugPrinter()
+        )
+        self.prompt_cache = prompt_cache
         self.prompts = PromptRegistry(
             project_root,
             prompt_manifest,
@@ -251,37 +267,71 @@ class OllamaLLM:
             "response_contract": contract,
         }
 
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    system_prompt
+                    + "\n\n只返回一个 JSON object。"
+                    + " 字段结构遵循用户提供的"
+                    + " response_contract。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    user_payload,
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+            },
+        ]
+
+        request_payload = {
+            "model": self.model,
+            "messages": messages,
+            "format": "json",
+            "stream": False,
+            "think": self.think,
+            "keep_alive": self.keep_alive,
+            "options": {
+                "temperature": self.temperature,
+            },
+        }
+
+        if self.prompt_cache is not None:
+            self.prompt_cache.record(
+                provider="ollama",
+                model=self.model,
+                role_key=role_key,
+                prompt=json.dumps(
+                    {
+                        "messages": messages,
+                        "response_contract": contract,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                    default=str,
+                ),
+                metadata={
+                    "transport": "ollama_chat",
+                    "endpoint": "/api/chat",
+                },
+            )
+
+        self.debugger.request(
+            adapter="ollama",
+            model=self.model,
+            role=role_key,
+            prompt={
+                "messages": messages,
+            },
+            response_contract=contract,
+        )
+
         response = await self.transport.post_json(
             "/api/chat",
-            {
-                "model": self.model,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": (
-                            system_prompt
-                            + "\n\n只返回一个 JSON object。"
-                            + " 字段结构遵循用户提供的"
-                            + " response_contract。"
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": json.dumps(
-                            user_payload,
-                            ensure_ascii=False,
-                            indent=2,
-                        ),
-                    },
-                ],
-                "format": "json",
-                "stream": False,
-                "think": self.think,
-                "keep_alive": self.keep_alive,
-                "options": {
-                    "temperature": self.temperature,
-                },
-            },
+            request_payload,
         )
 
         message = response.get("message")
@@ -425,20 +475,283 @@ class OllamaLLM:
             if task.task_id in effective_ids
         ]
 
-    async def discover_task_candidates(
+    async def discover_need_opportunities(
         self,
+        resources,
+        reality,
+        existing_tasks,
+        all_existing_tasks,
+        capabilities,
+    ):
+        parsed = await self._chat_json(
+            role_key="need_opportunity_discovery",
+            input_payload={
+                "current_resources": resources,
+                "current_reality": reality,
+                "effective_existing_tasks": existing_tasks,
+                "all_existing_tasks": all_existing_tasks,
+                "current_capabilities": capabilities,
+            },
+            contract={
+                "discoveries": [
+                    {
+                        "discovery_id": "string",
+                        "discovery_kind": "string",
+                        "reality_relation": "string",
+                        "user_relevance_hypothesis": "string",
+                        "desired_change_or_answer": "string",
+                        "independence_reason": "string",
+                        "reality_basis_refs": ["string"],
+                        "relevant_capability_ids": ["string"],
+                    }
+                ]
+            },
+        )
+        raw = parsed.get("discoveries") or []
+        if not isinstance(raw, list):
+            raise OllamaResponseError(
+                "Need / Opportunity Discovery discoveries 必须是 array。"
+            )
+        out = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            discovery_id = str(
+                item.get("discovery_id") or ""
+            ).strip()
+            relation = str(
+                item.get("reality_relation") or ""
+            ).strip()
+            relevance = str(
+                item.get("user_relevance_hypothesis") or ""
+            ).strip()
+            desired = str(
+                item.get("desired_change_or_answer") or ""
+            ).strip()
+            if not (discovery_id and relation and relevance and desired):
+                continue
+            out.append(
+                DiscoverySignal(
+                    discovery_id=discovery_id,
+                    discovery_kind=str(
+                        item.get("discovery_kind") or ""
+                    ).strip(),
+                    reality_relation=relation,
+                    user_relevance_hypothesis=relevance,
+                    desired_change_or_answer=desired,
+                    independence_reason=str(
+                        item.get("independence_reason") or ""
+                    ).strip(),
+                    reality_basis_refs=tuple(
+                        str(v)
+                        for v in (
+                            item.get("reality_basis_refs") or []
+                        )
+                    ),
+                    relevant_capability_ids=tuple(
+                        str(v)
+                        for v in (
+                            item.get("relevant_capability_ids") or []
+                        )
+                    ),
+                )
+            )
+        return out
+
+    async def discover_task_proliferation_seeds(
+        self,
+        resources,
+        reality,
+        existing_tasks,
+        all_existing_tasks,
+        capabilities,
+        task_outcomes,
+    ):
+        parsed = await self._chat_json(
+            role_key="task_proliferation",
+            input_payload={
+                "current_resources": resources,
+                "current_reality": reality,
+                "effective_existing_tasks": existing_tasks,
+                "all_existing_tasks": all_existing_tasks,
+                "current_capabilities": capabilities,
+                "task_outcomes": task_outcomes,
+            },
+            contract={
+                "seeds": [
+                    {
+                        "seed_id": "string",
+                        "work_relation": "string",
+                        "result_goal": "string",
+                        "user_value_hypothesis": "string",
+                        "independence_reason": "string",
+                        "reality_basis_refs": ["string"],
+                        "required_capability_ids": ["string"],
+                        "identity_anchor_refs": ["string"],
+                        "parent_task_ids": ["string"],
+                        "parent_outcome_ids": ["string"],
+                        "proliferation_reason": "string",
+                    }
+                ]
+            },
+        )
+        raw = parsed.get("seeds") or []
+        if not isinstance(raw, list):
+            raise OllamaResponseError(
+                "Task Proliferation seeds 必须是 array。"
+            )
+        seeds = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            seed_id = str(item.get("seed_id") or "").strip()
+            relation = str(item.get("work_relation") or "").strip()
+            result_goal = str(item.get("result_goal") or "").strip()
+            value = str(
+                item.get("user_value_hypothesis") or ""
+            ).strip()
+            if not (seed_id and relation and result_goal and value):
+                continue
+            seeds.append(
+                TaskSeed(
+                    seed_id=seed_id,
+                    work_relation=relation,
+                    result_goal=result_goal,
+                    user_value_hypothesis=value,
+                    independence_reason=str(
+                        item.get("independence_reason") or ""
+                    ).strip(),
+                    reality_basis_refs=tuple(
+                        str(v)
+                        for v in (item.get("reality_basis_refs") or [])
+                    ),
+                    required_capability_ids=tuple(
+                        str(v)
+                        for v in (item.get("required_capability_ids") or [])
+                    ),
+                    identity_anchor_refs=tuple(
+                        str(v)
+                        for v in (item.get("identity_anchor_refs") or [])
+                    ),
+                    origin_type="task_proliferation",
+                    parent_task_ids=tuple(
+                        str(v)
+                        for v in (item.get("parent_task_ids") or [])
+                    ),
+                    parent_outcome_ids=tuple(
+                        str(v)
+                        for v in (item.get("parent_outcome_ids") or [])
+                    ),
+                    proliferation_reason=str(
+                        item.get("proliferation_reason") or ""
+                    ).strip(),
+                )
+            )
+        return seeds
+
+    async def discover_task_seeds(
+        self,
+        resources,
         reality,
         existing_tasks,
         capabilities,
+        thinking_dimensions=None,
+        accepted_candidates=None,
+        discovery_signals=None,
     ):
         parsed = await self._chat_json(
             role_key="task_discovery",
             input_payload={
+                "discovery_phase": "breadth",
+                "current_resources": resources,
                 "current_reality": reality,
-                "effective_existing_tasks": (
-                    existing_tasks
-                ),
+                "effective_existing_tasks": existing_tasks,
                 "current_capabilities": capabilities,
+                "coverage_thinking_dimensions": (
+                    thinking_dimensions or []
+                ),
+                "first_pass_accepted_candidates": (
+                    accepted_candidates or []
+                ),
+                "discovery_signals": discovery_signals,
+            },
+            contract={
+                "seeds": [
+                    {
+                        "seed_id": "string",
+                        "work_relation": "string",
+                        "result_goal": "string",
+                        "user_value_hypothesis": "string",
+                        "independence_reason": "string",
+                        "reality_basis_refs": ["string"],
+                        "required_capability_ids": ["string"],
+                        "source_discovery_ids": ["string"],
+                    }
+                ]
+            },
+        )
+        raw = parsed.get("seeds") or []
+        if not isinstance(raw, list):
+            raise OllamaResponseError(
+                "Task Discovery seeds 必须是 array。"
+            )
+        seeds = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            seed_id = str(item.get("seed_id") or "").strip()
+            relation = str(item.get("work_relation") or "").strip()
+            result_goal = str(item.get("result_goal") or "").strip()
+            value = str(item.get("user_value_hypothesis") or "").strip()
+            if not (seed_id and relation and result_goal and value):
+                continue
+            seeds.append(
+                TaskSeed(
+                    seed_id=seed_id,
+                    work_relation=relation,
+                    result_goal=result_goal,
+                    user_value_hypothesis=value,
+                    independence_reason=str(
+                        item.get("independence_reason") or ""
+                    ).strip(),
+                    reality_basis_refs=tuple(
+                        str(v)
+                        for v in (item.get("reality_basis_refs") or [])
+                    ),
+                    required_capability_ids=tuple(
+                        str(v)
+                        for v in (item.get("required_capability_ids") or [])
+                    ),
+                    origin_type="reality_discovery",
+                    source_discovery_ids=tuple(
+                        str(v)
+                        for v in (item.get("source_discovery_ids") or [])
+                    ),
+                )
+            )
+        return seeds
+
+    async def materialize_task_candidates(
+        self,
+        resources,
+        reality,
+        existing_tasks,
+        capabilities,
+        seeds,
+        accepted_candidates=None,
+    ):
+        parsed = await self._chat_json(
+            role_key="task_discovery",
+            input_payload={
+                "discovery_phase": "materialize",
+                "current_resources": resources,
+                "current_reality": reality,
+                "effective_existing_tasks": existing_tasks,
+                "current_capabilities": capabilities,
+                "task_seeds": seeds,
+                "first_pass_accepted_candidates": (
+                    accepted_candidates or []
+                ),
             },
             contract={
                 "candidates": [
@@ -448,6 +761,8 @@ class OllamaLLM:
                         "description": "string",
                         "reality_basis": "string",
                         "expected_reality_result": "string",
+                        "user_value": "string",
+                        "execution_steps": ["string"],
                         "work_relation": "string",
                         "reality_basis_refs": ["string"],
                         "identity_anchor_refs": ["string"],
@@ -456,60 +771,225 @@ class OllamaLLM:
                 ]
             },
         )
+        return self._task_candidates_from_payload(parsed)
 
-        raw_candidates = parsed.get(
-            "candidates"
-        ) or []
-        if not isinstance(
-            raw_candidates,
-            list,
-        ):
+    def _task_candidates_from_payload(self, parsed):
+        raw = parsed.get("candidates") or []
+        if not isinstance(raw, list):
             raise OllamaResponseError(
                 "Task Discovery candidates 必须是 array。"
             )
-
         out = []
-        for item in raw_candidates:
+        for item in raw:
             if not isinstance(item, dict):
-                raise OllamaResponseError(
-                    "Candidate 必须是 object。"
-                )
-
+                continue
+            user_value = str(item.get("user_value") or "").strip()
+            steps = item.get("execution_steps") or []
+            if not user_value:
+                continue
+            if (
+                not isinstance(steps, list)
+                or not steps
+                or not all(str(step).strip() for step in steps)
+            ):
+                continue
             out.append(
                 TaskCandidate(
-                    task_identity=str(
-                        item.get(
-                            "task_identity",
-                            "",
-                        )
-                    ),
-                    reality_id=str(
-                        item.get(
-                            "reality_id",
-                            "",
-                        )
-                    ),
-                    description=str(
-                        item.get(
-                            "description",
-                            "",
-                        )
-                    ),
-                    reality_basis=str(
-                        item.get(
-                            "reality_basis",
-                            "",
-                        )
-                    ),
+                    task_identity=str(item.get("task_identity") or ""),
+                    reality_id=str(item.get("reality_id") or ""),
+                    description=str(item.get("description") or ""),
+                    reality_basis=str(item.get("reality_basis") or ""),
                     expected_reality_result=str(
+                        item.get("expected_reality_result") or ""
+                    ),
+                    user_value=user_value,
+                    execution_steps=tuple(
+                        str(value).strip() for value in steps
+                    ),
+                    work_relation=str(item.get("work_relation") or ""),
+                    reality_basis_refs=tuple(
+                        str(value)
+                        for value in (item.get("reality_basis_refs") or [])
+                    ),
+                    identity_anchor_refs=tuple(
+                        str(value)
+                        for value in (item.get("identity_anchor_refs") or [])
+                    ),
+                    required_capability_ids=tuple(
+                        str(value)
+                        for value in (item.get("required_capability_ids") or [])
+                    ),
+                )
+            )
+        return out
+
+    async def discover_task_candidates(
+        self,
+        resources,
+        reality,
+        existing_tasks,
+        capabilities,
+        thinking_dimensions=None,
+        accepted_candidates=None,
+    ):
+        seeds = await self.discover_task_seeds(
+            resources=resources,
+            reality=reality,
+            existing_tasks=existing_tasks,
+            capabilities=capabilities,
+            thinking_dimensions=thinking_dimensions,
+            accepted_candidates=accepted_candidates,
+        )
+        if not seeds:
+            return []
+        candidates = []
+        for seed in seeds:
+            materialized = await self.materialize_task_candidates(
+                resources=resources,
+                reality=reality,
+                existing_tasks=existing_tasks,
+                capabilities=capabilities,
+                seeds=[seed],
+                accepted_candidates=accepted_candidates,
+            )
+            candidates.extend(
+                list(materialized or [])
+            )
+        return candidates
+
+    async def repair_candidate_fields(
+        self,
+        resources,
+        reality,
+        existing_tasks,
+        capabilities,
+        candidate,
+        field_issues,
+    ):
+        parsed = await self._chat_json(
+            role_key="task_discovery",
+            input_payload={
+                "discovery_phase": "repair",
+                "current_resources": resources,
+                "current_reality": reality,
+                "effective_existing_tasks": existing_tasks,
+                "current_capabilities": capabilities,
+                "candidate": candidate,
+                "field_issues": field_issues,
+            },
+            contract={
+                "description": "string",
+                "expected_reality_result": "string",
+                "user_value": "string",
+                "execution_steps": ["string"],
+            },
+        )
+        return CandidateFieldRepair(
+            description=str(parsed.get("description") or "").strip(),
+            expected_reality_result=str(
+                parsed.get("expected_reality_result") or ""
+            ).strip(),
+            user_value=str(parsed.get("user_value") or "").strip(),
+            execution_steps=tuple(
+                str(step).strip()
+                for step in (parsed.get("execution_steps") or [])
+                if str(step).strip()
+            ),
+        )
+
+    async def expand_thinking_dimensions(
+        self,
+        resources,
+        reality,
+        existing_tasks,
+        capabilities,
+        accepted_candidates,
+        rejected_contexts=None,
+    ):
+        parsed = await self._chat_json(
+            role_key="task_coverage_expansion",
+            input_payload={
+                "current_resources": resources,
+                "current_reality": reality,
+                "effective_existing_tasks": (
+                    existing_tasks
+                ),
+                "current_capabilities": capabilities,
+                "first_pass_accepted_candidates": (
+                    accepted_candidates
+                ),
+                "first_pass_rejected_contexts": (
+                    rejected_contexts or []
+                ),
+            },
+            contract={
+                "dimensions": [
+                    {
+                        "dimension_id": "string",
+                        "focus": "string",
+                        "user_question": "string",
+                        "value_reason": "string",
+                        "independence_reason": "string",
+                        "reality_basis_refs": [
+                            "string"
+                        ],
+                        "relevant_capability_ids": [
+                            "string"
+                        ],
+                    }
+                ]
+            },
+        )
+
+        raw_dimensions = (
+            parsed.get("dimensions")
+            or []
+        )
+        if not isinstance(
+            raw_dimensions,
+            list,
+        ):
+            raise OllamaResponseError(
+                "Task Coverage Expansion "
+                "dimensions 必须是 array。"
+            )
+
+        dimensions = []
+        for item in raw_dimensions:
+            if not isinstance(item, dict):
+                raise OllamaResponseError(
+                    "Coverage Dimension 必须是 object。"
+                )
+
+            dimensions.append(
+                CoverageDimension(
+                    dimension_id=str(
                         item.get(
-                            "expected_reality_result",
+                            "dimension_id",
                             "",
                         )
                     ),
-                    work_relation=str(
+                    focus=str(
                         item.get(
-                            "work_relation",
+                            "focus",
+                            "",
+                        )
+                    ),
+                    user_question=str(
+                        item.get(
+                            "user_question",
+                            "",
+                        )
+                    ),
+                    value_reason=str(
+                        item.get(
+                            "value_reason",
+                            "",
+                        )
+                    ),
+                    independence_reason=str(
+                        item.get(
+                            "independence_reason",
                             "",
                         )
                     ),
@@ -522,20 +1002,11 @@ class OllamaLLM:
                             or []
                         )
                     ),
-                    identity_anchor_refs=tuple(
+                    relevant_capability_ids=tuple(
                         str(value)
                         for value in (
                             item.get(
-                                "identity_anchor_refs"
-                            )
-                            or []
-                        )
-                    ),
-                    required_capability_ids=tuple(
-                        str(value)
-                        for value in (
-                            item.get(
-                                "required_capability_ids"
+                                "relevant_capability_ids"
                             )
                             or []
                         )
@@ -543,10 +1014,11 @@ class OllamaLLM:
                 )
             )
 
-        return out
+        return dimensions
 
     async def destructive_review_candidate(
         self,
+        resources,
         reality,
         candidate,
         existing_tasks,
@@ -555,41 +1027,44 @@ class OllamaLLM:
         parsed = await self._chat_json(
             role_key="task_candidate_audit",
             input_payload={
+                "current_resources": resources,
                 "current_reality": reality,
                 "candidate": candidate,
                 "effective_existing_tasks": existing_tasks,
                 "current_capabilities": capabilities,
             },
             contract={
-                "keep": "boolean",
+                "core_valid": "boolean",
+                "repair_required": "boolean",
+                "field_issues": ["string"],
                 "challenge": "string",
                 "evidence": ["string"],
                 "reason": "string",
             },
         )
-
         return CandidateReview(
             candidate_id=candidate.candidate_id,
-            keep=bool(parsed.get("keep")),
-            challenge=str(
-                parsed.get("challenge") or ""
+            keep=bool(parsed.get("core_valid")),
+            repair_required=bool(parsed.get("repair_required")),
+            field_issues=tuple(
+                str(value)
+                for value in (parsed.get("field_issues") or [])
             ),
+            challenge=str(parsed.get("challenge") or ""),
             evidence=tuple(
                 str(value)
-                for value in (
-                    parsed.get("evidence") or []
-                )
+                for value in (parsed.get("evidence") or [])
             ),
-            reason=str(
-                parsed.get("reason") or ""
-            ),
+            reason=str(parsed.get("reason") or ""),
         )
 
     async def destructive_review_candidate_set(
         self,
+        resources,
         reality,
         candidates,
         existing_tasks,
+        capabilities,
     ):
         if not candidates:
             return CandidateSetReview(
@@ -601,12 +1076,18 @@ class OllamaLLM:
         parsed = await self._chat_json(
             role_key="task_candidate_set_audit",
             input_payload={
+                "current_resources": resources,
                 "current_reality": reality,
                 "candidates": candidates,
-                "effective_existing_tasks": existing_tasks,
+                "effective_existing_tasks": (
+                    existing_tasks
+                ),
+                "current_capabilities": capabilities,
             },
             contract={
-                "keep_candidate_ids": ["string"],
+                "keep_candidate_ids": [
+                    "string"
+                ],
                 "challenge": "string",
                 "evidence": ["string"],
                 "reason": "string",
@@ -629,35 +1110,51 @@ class OllamaLLM:
         unknown = set(keep_ids) - known
         if unknown:
             raise OllamaResponseError(
-                "Candidate Set Audit 返回未知 candidate_id："
-                + ", ".join(sorted(unknown))
+                "Candidate Set Audit 返回未知 "
+                "candidate_id："
+                + ", ".join(
+                    sorted(unknown)
+                )
             )
 
         return CandidateSetReview(
             keep_candidate_ids=keep_ids,
             challenge=str(
-                parsed.get("challenge") or ""
+                parsed.get(
+                    "challenge"
+                )
+                or ""
             ),
             evidence=tuple(
                 str(value)
                 for value in (
-                    parsed.get("evidence") or []
+                    parsed.get(
+                        "evidence"
+                    )
+                    or []
                 )
             ),
             reason=str(
-                parsed.get("reason") or ""
+                parsed.get(
+                    "reason"
+                )
+                or ""
             ),
         )
 
     async def review_final_task_reality(
         self,
+        resources,
         reality,
+        capabilities,
         task,
     ):
         parsed = await self._chat_json(
             role_key="task_reality_validity",
             input_payload={
+                "current_resources": resources,
                 "current_reality": reality,
+                "current_capabilities": capabilities,
                 "task": task,
             },
             contract={

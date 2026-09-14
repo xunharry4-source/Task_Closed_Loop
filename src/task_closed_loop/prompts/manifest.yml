@@ -5,9 +5,21 @@ prompts:
   existing_task_continuity:
     file: existing_task_continuity.md
     role: reconcile_existing_tasks
+  need_opportunity_discovery:
+    file: need_opportunity_discovery.md
+    role: discover_needs_and_opportunities
+  preflight_source_analysis:
+    file: preflight_source_analysis.md
+    role: materialize_resources_and_capabilities
   task_discovery:
     file: task_discovery.md
     role: discover_task_candidates
+  task_proliferation:
+    file: task_proliferation.md
+    role: discover_task_descendants
+  task_coverage_expansion:
+    file: task_coverage_expansion.md
+    role: expand_thinking_dimensions
   task_candidate_destructive_audit:
     file: task_candidate_destructive_audit.md
     role: review_single_candidate

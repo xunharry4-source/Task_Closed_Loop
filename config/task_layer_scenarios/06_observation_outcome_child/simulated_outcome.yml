@@ -1,0 +1,17 @@
+outcome_status: completed
+result_summary: "Mailbox observation found a real message asking for a revised quotation before tomorrow."
+evidence_refs:
+  - gmail:message:quote-2026-0914
+subject_refs:
+  - gmail:message:quote-2026-0914
+payload:
+  actionable_items:
+    - id: quote_followup
+      description: "Review the customer's request and prepare the revised quotation."
+      desired_result: "A revised quotation is ready for the concrete observed request."
+      required_capability_ids: [gemini_reason]
+      identity_anchor_refs: [gmail:message:quote-2026-0914]
+      evidence_ref: gmail:message:quote-2026-0914
+  message_id: quote-2026-0914
+  sender: buyer@example.com
+  subject: "Please revise quotation before tomorrow"

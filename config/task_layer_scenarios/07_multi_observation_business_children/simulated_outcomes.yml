@@ -1,0 +1,119 @@
+outcomes:
+  - state_domain: mailbox_current_state
+    outcome_status: completed
+    result_summary: "Mailbox observation found two concrete messages that require separate follow-up work."
+    evidence_refs:
+      - gmail:message:quote-001
+      - gmail:message:contract-002
+    subject_refs:
+      - gmail:message:quote-001
+      - gmail:message:contract-002
+    payload:
+      observed_messages:
+        - message_id: quote-001
+          sender: buyer@example.com
+          subject: "Revise quotation before tomorrow 15:00"
+          body_summary: "Buyer requests 500 units at unit price 11.90 instead of 12.50 and needs the revised quotation before tomorrow 15:00."
+        - message_id: contract-002
+          sender: legal@example.com
+          subject: "Contract signature page missing"
+          body_summary: "Counterparty says the returned contract package is missing the signed signature page and asks for a corrected package today."
+      actionable_items:
+        - id: quote_revision
+          description: "Prepare the revised quotation requested in message quote-001 using the observed quantity, target unit price, and deadline."
+          desired_result: "A revised quotation for 500 units at 11.90 per unit is ready for review before the stated deadline."
+          required_capability_ids: [gemini_reason]
+          identity_anchor_refs: [gmail:message:quote-001]
+        - id: contract_package_fix
+          description: "Determine what is missing from the contract package in message contract-002 and prepare the corrected package requirements."
+          desired_result: "A concrete correction checklist identifies the missing signature page and what must be included in the corrected contract package."
+          required_capability_ids: [gemini_reason]
+          identity_anchor_refs: [gmail:message:contract-002]
+
+  - state_domain: database_current_state
+    outcome_status: completed
+    result_summary: "Database observation found a payment failure spike and a separate duplicate-order anomaly."
+    evidence_refs:
+      - db:metric:payment_failure_7d
+      - db:anomaly:duplicate_orders_2026-09-14
+    subject_refs:
+      - db:metric:payment_failure_7d
+      - db:anomaly:duplicate_orders_2026-09-14
+    payload:
+      observations:
+        payment_failure_rate_previous: 0.021
+        payment_failure_rate_current: 0.089
+        concentrated_gateway: stripe_eu
+        duplicate_order_count: 37
+        duplicate_order_window: "2026-09-14T08:00:00Z/2026-09-14T10:00:00Z"
+      actionable_items:
+        - id: payment_failure_analysis
+          description: "Analyze the observed payment failures to identify which error codes, time windows, or transaction patterns explain the 2.1% to 8.9% spike concentrated on stripe_eu."
+          desired_result: "A ranked evidence-backed explanation of the payment failure spike, including the dominant failure codes/patterns and affected transaction scope."
+          required_capability_ids: [database_read, gemini_reason]
+          identity_anchor_refs: [db:metric:payment_failure_7d]
+        - id: duplicate_order_analysis
+          description: "Investigate the 37 duplicate orders observed in the stated two-hour window and determine the common creation path or trigger."
+          desired_result: "A verified cause hypothesis and affected-order set for the duplicate-order anomaly."
+          required_capability_ids: [database_read, gemini_reason]
+          identity_anchor_refs: [db:anomaly:duplicate_orders_2026-09-14]
+
+  - state_domain: cloud_drive_current_state
+    outcome_status: completed
+    result_summary: "Cloud Drive observation found a new requirements version and a separate unresolved customer-feedback file."
+    evidence_refs:
+      - drive:file:requirements_v8
+      - drive:file:customer_feedback_week37
+    subject_refs:
+      - drive:file:requirements_v8
+      - drive:file:customer_feedback_week37
+    payload:
+      observed_files:
+        - file_id: requirements_v8
+          path: "/project/requirements_v8.md"
+          summary: "Adds enterprise SSO and changes onboarding approval rules; current implementation notes still reference v7."
+        - file_id: customer_feedback_week37
+          path: "/research/customer_feedback_week37.csv"
+          summary: "Contains 143 new customer feedback rows not yet summarized in any current project resource."
+      actionable_items:
+        - id: requirements_delta
+          description: "Compare requirements_v8 with the currently referenced v7 requirements and produce the concrete implementation-impact delta."
+          desired_result: "A change-impact list identifies new SSO/onboarding requirements, affected implementation areas, and unresolved decisions."
+          required_capability_ids: [cloud_drive_read, gemini_reason]
+          identity_anchor_refs: [drive:file:requirements_v8]
+        - id: customer_feedback_synthesis
+          description: "Analyze the newly observed week-37 customer feedback file and identify recurring requests, complaints, and high-impact themes."
+          desired_result: "A prioritized evidence-backed summary of recurring customer feedback themes with counts/examples sufficient for follow-up decisions."
+          required_capability_ids: [cloud_drive_read, gemini_reason]
+          identity_anchor_refs: [drive:file:customer_feedback_week37]
+
+  - state_domain: calendar_current_state
+    outcome_status: completed
+    result_summary: "Calendar observation found a customer review meeting and a separate regulatory filing deadline."
+    evidence_refs:
+      - calendar:event:customer-review-2026-09-15
+      - calendar:event:filing-deadline-2026-09-18
+    subject_refs:
+      - calendar:event:customer-review-2026-09-15
+      - calendar:event:filing-deadline-2026-09-18
+    payload:
+      observed_events:
+        - event_id: customer-review-2026-09-15
+          start: "2026-09-15T14:00:00+01:00"
+          title: "Customer quarterly review"
+          notes: "Agenda requires delivery-status summary, open risks, and next-quarter commitments."
+        - event_id: filing-deadline-2026-09-18
+          start: "2026-09-18T17:00:00+01:00"
+          title: "Regulatory filing deadline"
+          notes: "Submission must include the current quarter compliance statement."
+      actionable_items:
+        - id: customer_review_brief
+          description: "Prepare the evidence-backed briefing content required for the customer quarterly review, covering delivery status, open risks, and next-quarter commitments."
+          desired_result: "A meeting-ready briefing structure with the required status, risks, and commitments identified for review."
+          required_capability_ids: [gemini_reason]
+          identity_anchor_refs: [calendar:event:customer-review-2026-09-15]
+        - id: filing_preparation
+          description: "Determine the information required for the observed regulatory filing deadline and produce a concrete preparation checklist for the current-quarter compliance statement."
+          desired_result: "A deadline-bound filing preparation checklist identifies required evidence and unresolved inputs before submission."
+          required_capability_ids: [gemini_reason]
+          identity_anchor_refs: [calendar:event:filing-deadline-2026-09-18]

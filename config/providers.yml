@@ -1,29 +1,24 @@
 # ============================================================
-# Provider 配置
+# Provider / MCP 说明｜V0.35
 # ============================================================
 #
-# 正式运行：
-#   python start.py
+# Provider / MCP / Connector 仍然保留，后续用于 PRE-FLIGHT 层接入真实系统。
+# Task Runtime 已不再直接从 Provider Registry discover Resource/Capability。
 #
-# 测试 Resource / Capability：
-#   python test_runtime.py
+# 本地 Task 测试：
+#   config/task_layer_test/resources.yml
+#   config/task_layer_test/capabilities.yml
 #
-# test_runtime.py 会在内存中启用 test_config Provider，
-# 正式运行不会加载测试 Resource / Capability。
-#
-# 真实 Gmail / 数据库 / 服务器 / 第三方系统：
-#   config/mcp_servers.yml
+# 正式 Task Runtime：
+#   cli_project/generated/resources.generated.yml
+#   cli_project/generated/capabilities.generated.yml
 #
 # ============================================================
 
 providers:
 
+  # Legacy / preflight compatibility adapter.
+  # 不再由 test_runtime.py 自动启用。
   test_config:
     enabled: false
     adapter: task_closed_loop.adapters.test_config:TestConfigProvider
-
-  # 高级兼容自定义 Provider 示例：
-  #
-  # legacy_system:
-  #   enabled: true
-  #   adapter: task_closed_loop.adapters.legacy_system:LegacySystemAdapter

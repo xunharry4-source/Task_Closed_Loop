@@ -1,0 +1,13 @@
+schema_version: "1.0"
+producer: "manual-task-layer-scenario"
+resources:
+  - id: payment_failure_report
+    type: analyzed_business_fact
+    source_identity: "manual-fixture:payment_failure_report"
+    availability: available
+    payload:
+      observed_issue: "Payment failure rate rose from 2.1% to 8.7% in the latest 24 hours."
+      affected_scope: "checkout/payment"
+      evidence: "412 failed attempts, concentrated in card channel A"
+      desired_result: "Identify the verified cause and reduce avoidable payment failures."
+      recommended_capability: python_analysis

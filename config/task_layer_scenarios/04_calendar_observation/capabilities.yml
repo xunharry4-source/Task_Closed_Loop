@@ -1,0 +1,14 @@
+schema_version: "1.0"
+producer: manual-task-layer-scenario
+capabilities:
+  - id: calendar_read
+    provider_id: local-test-preflight
+    action_type: read_calendar
+    principal: local-test-user
+    security_domain: test-calendar
+    target_scope:
+      calendar_scope: primary_calendar
+    permissions: [list_events, read_event]
+    can_observe_state: true
+    observable_state: calendar_current_state
+    observation_operations: [list_events, read_event]

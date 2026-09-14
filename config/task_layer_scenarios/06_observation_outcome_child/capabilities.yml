@@ -1,0 +1,16 @@
+schema_version: "1.0"
+producer: "manual-task-layer-scenario"
+capabilities:
+  - id: gmail_read
+    action_type: read_mailbox
+    availability: available
+    permissions: [search_mail, read_mail]
+    can_observe_state: true
+    observable_state: mailbox_current_state
+    observation_operations: [search_messages, read_message]
+  - id: gemini_reason
+    action_type: reasoning
+    availability: available
+    permissions: [reason]
+    can_observe_state: false
+    observation_operations: []

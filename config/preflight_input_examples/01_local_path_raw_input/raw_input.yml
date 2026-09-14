@@ -1,0 +1,11 @@
+example_stage: preflight_raw_input
+raw_resources:
+- kind: local_path
+  value: D:/work/my-project
+raw_capabilities:
+- kind: local_filesystem_connector
+  operations:
+  - stat
+  - list_directory
+  - read_file
+expected_preflight_behavior: 解析/读取本地路径并输出已物化 Resource；不得把未物化路径直接写入 Task resources.yml。

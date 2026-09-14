@@ -7,9 +7,6 @@ environment:
     project.environment: APP_ENV
     storage.backend: STORAGE_BACKEND
     storage.sqlite_path: STORAGE_SQLITE_PATH
-    llm.adapter: LLM_ADAPTER
-    llm.model: LLM_MODEL
-    llm.temperature: LLM_TEMPERATURE
     logging.level: LOG_LEVEL
     execution.refresh_capabilities_before_attempt: EXECUTION_REFRESH_CAPABILITIES
     persistence.save_reality_history: SAVE_REALITY_HISTORY
@@ -24,6 +21,21 @@ environment:
     llm.lmstudio.timeout_seconds: LMSTUDIO_TIMEOUT_SECONDS
     llm.lmstudio.max_tokens: LMSTUDIO_MAX_TOKENS
     llm.lmstudio.api_key: LMSTUDIO_API_KEY
+    debug.enabled: DEBUG
+    llm.task.adapter: TASK_LLM_ADAPTER
+    llm.task.model: TASK_LLM_MODEL
+    llm.task.temperature: TASK_LLM_TEMPERATURE
+    llm.audit.adapter: AUDIT_LLM_ADAPTER
+    llm.audit.model: AUDIT_LLM_MODEL
+    llm.audit.temperature: AUDIT_LLM_TEMPERATURE
+    llm.openai.base_url: OPENAI_BASE_URL
+    llm.openai.timeout_seconds: OPENAI_TIMEOUT_SECONDS
+    llm.openai.max_tokens: OPENAI_MAX_TOKENS
+    llm.openai.api_key: OPENAI_API_KEY
+    llm.deepseek.base_url: DEEPSEEK_BASE_URL
+    llm.deepseek.timeout_seconds: DEEPSEEK_TIMEOUT_SECONDS
+    llm.deepseek.max_tokens: DEEPSEEK_MAX_TOKENS
+    llm.deepseek.api_key: DEEPSEEK_API_KEY
   secrets:
     openai_api_key: OPENAI_API_KEY
     google_application_credentials: GOOGLE_APPLICATION_CREDENTIALS

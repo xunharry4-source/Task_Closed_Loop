@@ -1,0 +1,13 @@
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+data/*.db
+log/
+
+# CLI Project runtime working directory (the shipped skeleton is cli_project_template/).
+cli_project/
+execution_workspace/
+
+# Local .env backups
+.env.bak.*

@@ -11,6 +11,9 @@ from task_closed_loop.integration.models import (
     ResourceDescriptor,
     ResourceSnapshot,
 )
+from task_closed_loop.integration.capability_semantics import (
+    infer_can_observe_state,
+)
 
 
 class MCPDependencyError(RuntimeError):
@@ -538,6 +541,17 @@ class MCPProvider:
                     else:
                         schema = {}
 
+                target_scope = {
+                    "mcp_server": self.server_id,
+                    "tool": name,
+                }
+                can_observe_state = infer_can_observe_state(
+                    action_type=name,
+                    description=str(description),
+                    permissions=("execute",),
+                    target_scope=target_scope,
+                )
+
                 out.append(
                     CapabilityDescriptor(
                         capability_id=(
@@ -556,12 +570,7 @@ class MCPProvider:
                             "mcp:"
                             + self.server_id
                         ),
-                        target_scope={
-                            "mcp_server": (
-                                self.server_id
-                            ),
-                            "tool": name,
-                        },
+                        target_scope=target_scope,
                         permissions=("execute",),
                         availability="available",
                         description=str(
@@ -569,6 +578,17 @@ class MCPProvider:
                         ),
                         input_schema=dict(
                             schema
+                        ),
+                        can_observe_state=can_observe_state,
+                        observable_state=(
+                            str(description)
+                            if can_observe_state
+                            else None
+                        ),
+                        observation_operations=(
+                            (name,)
+                            if can_observe_state
+                            else ()
                         ),
                     )
                 )

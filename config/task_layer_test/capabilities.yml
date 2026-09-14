@@ -1,0 +1,84 @@
+schema_version: '1.0'
+producer: manual-task-layer-test-fixture
+capabilities:
+- id: gmail_read
+  provider_id: local-test-preflight
+  action_type: read_mailbox
+  description: 读取已授权邮箱状态。这里的语义由 Preflight 文件直接给出，Task 层不再自行推断。
+  principal: local-test-user
+  security_domain: test-mailbox
+  availability: available
+  permissions:
+  - search_mail
+  - read_mail
+  target_scope:
+    account: test-mailbox
+  can_observe_state: true
+  observable_state: mailbox_current_state
+  observation_operations:
+  - search_messages
+  - read_message
+- id: database_read
+  provider_id: local-test-preflight
+  action_type: query_database
+  description: 读取测试数据库。
+  principal: local-test-user
+  security_domain: test-database
+  availability: available
+  permissions:
+  - list_schema
+  - query
+  target_scope:
+    database: test_database
+  can_observe_state: true
+  observable_state: database_current_state
+  observation_operations:
+  - list_schema
+  - query
+- id: cloud_drive_read
+  provider_id: local-test-preflight
+  action_type: read_file_store
+  description: 读取测试网盘。
+  principal: local-test-user
+  security_domain: test-drive
+  availability: available
+  permissions:
+  - list_files
+  - search_files
+  - read_file
+  target_scope:
+    drive: test_drive
+  can_observe_state: true
+  observable_state: cloud_drive_current_state
+  observation_operations:
+  - list_files
+  - search_files
+  - read_file
+- id: calendar_read
+  provider_id: local-test-preflight
+  action_type: read_calendar
+  description: 读取已标准化授权范围内的日历当前状态。
+  principal: local-test-user
+  security_domain: test-calendar
+  availability: available
+  permissions:
+  - list_events
+  - read_event
+  target_scope:
+    calendar_scope: primary_calendar
+  can_observe_state: true
+  observable_state: calendar_current_state
+  observation_operations:
+  - list_events
+  - read_event
+- id: gemini_reason
+  provider_id: local-test-preflight
+  action_type: reasoning
+  description: 只分析已经提供给它的输入；没有外部状态读取权限。
+  principal: local-test-user
+  security_domain: reasoning
+  availability: available
+  permissions:
+  - reason
+  can_observe_state: false
+  observation_operations: []

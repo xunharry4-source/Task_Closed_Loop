@@ -1,25 +1,33 @@
-# Task Generation Core 配置
-# Task Generation 与 R1-R5 Offline Diagnostics 独立。
-
 task_generation:
+  # Stage 3-7 的固定生产顺序：
+  #   3 首次生成 -> 4 审查 -> 5 数量检查 -> (6 维度 -> 7 重生成 -> 回到 4)
+  # max_rounds 只限制 5<->7 的补充轮数，不是最终 Task 数量上限。
+  production_pipeline:
+    enabled: true
+    max_rounds: ${TASK_PIPELINE_MAX_ROUNDS:3}
+  need_opportunity_discovery:
+    enabled: true
+    prompt: src/task_closed_loop/prompts/need_opportunity_discovery.md
+  task_proliferation:
+    enabled: true
+    require_observed_outcome: true
+    max_inline_outcome_payload_bytes: 65536
+    max_total_outcome_payload_bytes: 262144
+    prompt: src/task_closed_loop/prompts/task_proliferation.md
   discovery:
     prompt: src/task_closed_loop/prompts/task_discovery.md
-
   candidate_destructive_audit:
     prompt: src/task_closed_loop/prompts/task_candidate_destructive_audit.md
-
   candidate_set_audit:
     prompt: src/task_closed_loop/prompts/task_candidate_set_audit.md
-
   finalizer:
-    # Finalizer 使用 Python 确定性转换，保持审查后的 Candidate 字段。
     mode: deterministic
-
   fidelity_audit:
     enabled: true
-
   reality_validity_audit:
     enabled: true
-
   zero_task:
     enabled: true
+  coverage_expansion:
+    enabled: true
+    min_qualified_tasks: 5

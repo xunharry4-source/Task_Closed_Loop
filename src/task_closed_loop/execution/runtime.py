@@ -76,6 +76,6 @@ class ExecutionRuntime:
         )
 
         return ExternalEffect.from_observation(
-            intent.execution_intent_id,
+            intent,
             observation,
         )

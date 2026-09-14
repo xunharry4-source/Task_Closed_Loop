@@ -1,0 +1,41 @@
+schema_version: 2
+project_id: task-closed-loop-execution-workspace
+project_role: persistent_capability_workspace
+owner_system: task-closed-loop
+cli:
+  preflight_engine: auto
+  task_execution_engine: inherit_preflight
+  allowed_engines:
+  - codex_cli
+  - gemini_cli
+  - claude_cli
+  capability_build_engine: inherit_preflight
+policies:
+  architecture_owned_by_host: true
+  cli_may_modify_architecture: false
+  cli_may_repair_locked_architecture: true
+  cli_may_create_capabilities: true
+  cli_may_modify_verified_capabilities: task_scoped
+  secrets_must_not_be_written_to_source: true
+  secrets_must_not_be_written_to_environment: true
+  secrets_source: dotenv_file
+  new_capability_requires_tests: true
+  new_capability_requires_registry_entry: true
+  execution_requires_verified_capability: true
+  cli_self_report_is_not_verification: true
+  trusted_outcome_requires_host_verification: true
+  external_write_requires_readback_verification: true
+  filesystem_write_requires_artifact_or_readback_verification: true
+paths:
+  capability_registry: capability_registry.yml
+  capabilities: capabilities
+  connectors: connectors
+  builds: builds
+  artifacts: artifacts
+  state: state
+  logs: logs
+  temp: temp
+  analysis: analysis
+  generated: generated
+  secrets_file: .env
+execution_project_version: 1.1.0

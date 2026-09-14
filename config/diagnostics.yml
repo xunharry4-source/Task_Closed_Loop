@@ -5,6 +5,11 @@
 diagnostics:
   enabled: true
 
+  # Diagnostic-only prompt persistence. Default OFF because prompts may contain Resource content.
+  prompt_cache:
+    enabled: ${PROMPT_CACHE_ENABLED:false}
+    directory: ${PROMPT_CACHE_DIR:log}
+
   # Diagnostics remains outside Runtime Core.
   runtime_integration: false
 

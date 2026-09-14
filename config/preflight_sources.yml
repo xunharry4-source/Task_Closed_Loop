@@ -1,0 +1,57 @@
+# Stage 2 fixed input contract. The filename is retained for compatibility, but the
+# only accepted top-level section is preflight_inputs.
+preflight_inputs:
+  enabled: true
+
+  cli:
+    # Empty means: select the first READY engine from execution.capability_project.allowed_cli_engines.
+    engine: ${PREFLIGHT_CLI_ENGINE:}
+    timeout_seconds: ${PREFLIGHT_CLI_TIMEOUT_SECONDS:900}
+
+  analysis_timeout_seconds: ${PREFLIGHT_ANALYSIS_TIMEOUT_SECONDS:600}
+
+  # Local resource directories. Relative paths resolve from the task-closed-loop
+  # project root. Stage 2 refuses to start if a configured directory does not exist.
+  local_resources: []
+
+  # Remote resource scopes such as a cloud-drive folder. Each entry must reference
+  # one configured function_id that knows how to access the remote system.
+  remote_resources: []
+
+  # Actual external functions/systems: Gmail, cloud drive, database, API, calendar,
+  # etc. Real credentials are stored only in cli_project/.env. This file names only
+  # secret_refs; it must never inline password/token/DSN/connection_string values.
+  functions: []
+
+# Example (commented):
+# preflight_inputs:
+#   enabled: true
+#   local_resources:
+#     - id: local_project_docs
+#       directory: ./user_resources/project_docs
+#       description: Local project documents to inventory and analyze.
+#
+#   remote_resources:
+#     - id: team_drive_folder
+#       kind: cloud_drive_directory
+#       function_id: team_drive
+#       scope:
+#         folder_id: shared-project-folder
+#       description: Team drive project folder.
+#
+#   functions:
+#     - id: team_drive
+#       kind: cloud_drive
+#       description: Authorized team cloud drive.
+#       secret_refs: [DRIVE_CREDENTIAL]
+#       operations: [list_files, read_file, search_files]
+#       scope:
+#         account: team_drive_primary
+#
+#     - id: primary_mailbox
+#       kind: gmail
+#       description: Authorized primary mailbox.
+#       secret_refs: [GMAIL_CREDENTIAL]
+#       operations: [search_messages, read_message]
+#       scope:
+#         account: primary_mailbox

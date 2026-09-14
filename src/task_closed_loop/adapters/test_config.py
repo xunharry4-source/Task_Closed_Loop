@@ -11,6 +11,9 @@ from task_closed_loop.integration.models import (
     ResourceDescriptor,
     ResourceSnapshot,
 )
+from task_closed_loop.integration.capability_semantics import (
+    infer_can_observe_state,
+)
 
 
 class TestConfigurationError(ValueError):
@@ -263,6 +266,9 @@ class TestConfigProvider:
                 "availability": "available",
                 "permissions": ("execute",),
                 "target_scope": {},
+                "can_observe_state": False,
+                "observable_state": None,
+                "observation_operations": (),
             }
 
         if not isinstance(item, dict):
@@ -311,6 +317,49 @@ class TestConfigProvider:
                 "target_scope 必须是 mapping。"
             )
 
+        observation = item.get("observation")
+        if observation is None:
+            observation = {}
+        if not isinstance(observation, dict):
+            raise TestConfigurationError(
+                f"Capability '{capability_id}' "
+                "observation 必须是 mapping。"
+            )
+
+        explicit_observe = observation.get("enabled")
+        if explicit_observe is None and "can_observe_state" in item:
+            explicit_observe = item.get("can_observe_state")
+
+        observation_operations = (
+            observation.get("operations")
+            or item.get("observation_operations")
+            or []
+        )
+        if not isinstance(observation_operations, (list, tuple)):
+            raise TestConfigurationError(
+                f"Capability '{capability_id}' "
+                "observation.operations 必须是 list。"
+            )
+
+        can_observe_state = infer_can_observe_state(
+            action_type=action_type,
+            description=description,
+            permissions=permissions,
+            target_scope=target_scope,
+            explicit=(
+                bool(explicit_observe)
+                if explicit_observe is not None
+                else None
+            ),
+        )
+        observable_state = (
+            observation.get("state_domain")
+            or observation.get("description")
+            or item.get("observable_state")
+        )
+        if observable_state is not None:
+            observable_state = str(observable_state).strip() or None
+
         return {
             "id": capability_id,
             "description": description,
@@ -336,6 +385,12 @@ class TestConfigProvider:
                 for value in permissions
             ),
             "target_scope": target_scope,
+            "can_observe_state": can_observe_state,
+            "observable_state": observable_state,
+            "observation_operations": tuple(
+                str(value)
+                for value in observation_operations
+            ),
         }
 
     async def discover_resources(self):
@@ -378,6 +433,11 @@ class TestConfigProvider:
                 permissions=tuple(item["permissions"]),
                 availability=item["availability"],
                 description=item["description"],
+                can_observe_state=item["can_observe_state"],
+                observable_state=item["observable_state"],
+                observation_operations=tuple(
+                    item["observation_operations"]
+                ),
             )
             for item in self._capabilities
         ]

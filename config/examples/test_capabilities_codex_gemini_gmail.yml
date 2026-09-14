@@ -1,0 +1,53 @@
+capabilities:
+  - id: codex
+    description: Use Codex to read and write code, inspect the development workspace, create scripts, process structured data, run programmatic analysis, and produce code-based artifacts.
+    action_type: codex
+    principal: local-developer
+    security_domain: local-development
+    availability: available
+    permissions:
+      - read_workspace
+      - write_workspace
+      - execute_code
+    target_scope:
+      type: development_workspace
+    observation:
+      enabled: true
+      state_domain: current development workspace
+      operations:
+        - inspect_workspace
+        - read_files
+
+  - id: gemini
+    description: Use Gemini to analyze supplied text, images, and structured inputs and produce reasoning or generated outputs. It does not independently expose external account state in this test definition.
+    action_type: gemini
+    principal: local-developer
+    security_domain: local-development
+    availability: available
+    permissions:
+      - analyze_supplied_input
+    target_scope:
+      type: supplied_input
+    observation:
+      enabled: false
+
+  - id: gmail
+    description: Search and read email conversations, inspect current mailbox state, create drafts, send or forward messages, and organize mail.
+    action_type: gmail
+    principal: connected-user
+    security_domain: connected-mail
+    availability: available
+    permissions:
+      - search_messages
+      - read_messages
+      - create_draft
+      - send_message
+      - organize_mail
+    target_scope:
+      type: authenticated_mailbox
+    observation:
+      enabled: true
+      state_domain: authenticated Gmail mailbox
+      operations:
+        - search_messages
+        - read_messages

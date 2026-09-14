@@ -1,2 +1,0 @@
-Current Reality: {'cert-1': 'production certificate expires tomorrow'}
-New Tasks: ['Renew production certificate before expiry']

@@ -1,0 +1,8 @@
+# Task-layer local test fixtures only.
+# Formal production never reads a manually configured "prepared" path: Stage 3
+# consumes the exact resources.generated.yml / capabilities.generated.yml paths
+# returned by the current Stage 2 run.
+task_inputs:
+  test:
+    resources_file: ${TASK_TEST_RESOURCES_FILE:config/task_layer_test/resources.yml}
+    capabilities_file: ${TASK_TEST_CAPABILITIES_FILE:config/task_layer_test/capabilities.yml}

@@ -46,8 +46,28 @@ class ExternalEffect:
     evidence_refs: tuple[str, ...] = ()
     observed_at: datetime = field(default_factory=utc_now)
     raw_result: Any = None
+    task_id: str = ""
+    # Stable reality-object identities observed/affected by this effect when known.
+    subject_refs: tuple[str, ...] = ()
 
     @classmethod
-    def from_observation(cls, intent_id, obs):
-        return cls(str(uuid4()), obs.attempt_id, intent_id, dict(obs.target_at_execution),
-                   dict(obs.effect_scope), obs.commit_knowledge, tuple(obs.evidence_refs), obs.observed_at, obs.raw_result)
+    def from_observation(cls, intent_or_id, obs):
+        intent_id = getattr(
+            intent_or_id,
+            "execution_intent_id",
+            intent_or_id,
+        )
+        task_id = getattr(intent_or_id, "task_id", "")
+        return cls(
+            str(uuid4()),
+            obs.attempt_id,
+            str(intent_id),
+            dict(obs.target_at_execution),
+            dict(obs.effect_scope),
+            obs.commit_knowledge,
+            tuple(obs.evidence_refs),
+            obs.observed_at,
+            obs.raw_result,
+            str(task_id or ""),
+            tuple(getattr(obs, "subject_refs", ()) or ()),
+        )

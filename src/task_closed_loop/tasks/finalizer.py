@@ -42,6 +42,8 @@ class FinalizerFidelityAudit:
                 candidate.description,
                 candidate.reality_basis,
                 candidate.expected_reality_result,
+                candidate.user_value,
+                tuple(candidate.execution_steps),
             )
             actual = (
                 task.task_identity,
@@ -49,6 +51,8 @@ class FinalizerFidelityAudit:
                 task.description,
                 task.reality_basis,
                 task.expected_reality_result,
+                task.user_value,
+                tuple(task.execution_steps),
             )
 
             if actual != expected:

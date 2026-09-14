@@ -1,0 +1,12 @@
+schema_version: "1.0"
+producer: "manual-task-layer-test-fixture"
+resources:
+  - id: test_project_context
+    provider_id: local-test-preflight
+    type: project_context
+    source_identity: manual-fixture:test_project_context
+    availability: available
+    payload:
+      fact: "这是人工编写的 Task 层测试资源。V0.35 本地测试不验证 Preflight 是否能从外部系统生成它。"
+      project: "task-closed-loop"
+      note: "Task 层只消费标准化 Resource，不负责识别原始来源。"

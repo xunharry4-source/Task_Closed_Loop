@@ -7,6 +7,8 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from task_closed_loop.llm.debug import LLMDebugPrinter
+from task_closed_loop.llm.prompt_cache import PromptRequestCache
 from task_closed_loop.llm.gemini import (
     GeminiLLM,
     _jsonable,
@@ -181,12 +183,14 @@ class LMStudioLLM(GeminiLLM):
         transport: LMStudioTransport
         | Any
         | None = None,
+        debugger: LLMDebugPrinter | None = None,
+        prompt_cache: PromptRequestCache | None = None,
     ):
         model = str(model or "").strip()
 
         if not model:
             raise LMStudioConfigurationError(
-                "LLM_MODEL 未配置。"
+                "model 未配置。"
             )
 
         self.model = model
@@ -201,6 +205,12 @@ class LMStudioLLM(GeminiLLM):
         self.roles = dict(
             roles or {}
         )
+        self.debugger = (
+            debugger
+            if debugger is not None
+            else LLMDebugPrinter()
+        )
+        self.prompt_cache = prompt_cache
         self.prompts = PromptRegistry(
             project_root,
             prompt_manifest,
@@ -311,6 +321,46 @@ class LMStudioLLM(GeminiLLM):
             request_payload[
                 "max_tokens"
             ] = self.max_tokens
+
+        if self.prompt_cache is not None:
+            self.prompt_cache.record(
+                provider="lmstudio",
+                model=self.model,
+                role_key=role_key,
+                prompt=json.dumps(
+                    {
+                        "messages": request_payload[
+                            "messages"
+                        ],
+                        "response_format": request_payload[
+                            "response_format"
+                        ],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                    default=str,
+                ),
+                metadata={
+                    "transport": "openai_compatible_chat_completions",
+                    "endpoint": "/chat/completions",
+                },
+            )
+
+        self.debugger.request(
+            adapter="lmstudio",
+            model=self.model,
+            role=role_key,
+            prompt={
+                "messages": request_payload[
+                    "messages"
+                ],
+            },
+            response_contract=(
+                request_payload[
+                    "response_format"
+                ]
+            ),
+        )
 
         response = (
             await self.transport.post_json(

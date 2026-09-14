@@ -1,20 +1,31 @@
-# Runtime 核心配置。
 reality:
-  # Current Reality 使用的 Prompt。
   prompt: src/task_closed_loop/prompts/runtime_prompt.md
-
 task_generation:
-  # Task Generation 输出模板。
   output_template: src/task_closed_loop/prompts/output_template.md
-
 execution:
-  # 建立 Attempt 前刷新当前 Capability。
   refresh_capabilities_before_attempt: true
-  # External Effect 保留执行时 Target。
   preserve_execution_target_on_effect: true
-
+  capability_project:
+    enabled: true
+    # Stage 1 locked policy:
+    # - directory missing -> Host copies cli_project_template/
+    # - directory valid   -> reuse unchanged
+    # - directory exists but invalid -> READY CLI repairs it in place
+    workspace_path: ${CLI_PROJECT_PATH:cli_project}
+    template_path: cli_project_template
+    auto_bootstrap: true
+    stage_1_repair_timeout_seconds: 900
+    task_execution_engine: inherit_preflight
+    allowed_cli_engines:
+    - codex_cli
+    - gemini_cli
+    - claude_cli
+    require_verified_capability: true
+    require_host_verification: true
+    secrets_source: cli_project/.env
+    secrets_in_environment_forbidden: true
 persistence:
-  # 保存 Reality 历史。
   save_reality_history: true
-  # 保存真实 External Effect。
   save_execution_effects: true
+debug:
+  enabled: ${DEBUG:false}

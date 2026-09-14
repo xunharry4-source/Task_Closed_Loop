@@ -1,45 +1,48 @@
-# LLM 配置
-# 正式 Runtime 必须显式设置 LLM_ADAPTER 与 LLM_MODEL。
-#
-# 当前支持：
-#   gemini
-#   ollama
-#   lmstudio
-#
-# Gemini:
-#   LLM_ADAPTER=gemini
-#   LLM_MODEL=gemini-3.6-flash
-#
-# Ollama:
-#   LLM_ADAPTER=ollama
-#   LLM_MODEL=<ollama list 中的模型名>
-#
-# LM Studio:
-#   LLM_ADAPTER=lmstudio
-#   LLM_MODEL=<LM Studio /v1/models 返回的模型 id>
-
 llm:
-  adapter: ${LLM_ADAPTER}
-  model: ${LLM_MODEL}
-  temperature: ${LLM_TEMPERATURE:0.0}
-
+  task:
+    adapter: ${TASK_LLM_ADAPTER}
+    model: ${TASK_LLM_MODEL}
+    temperature: ${TASK_LLM_TEMPERATURE:0.0}
+  audit:
+    adapter: ${AUDIT_LLM_ADAPTER}
+    model: ${AUDIT_LLM_MODEL}
+    temperature: ${AUDIT_LLM_TEMPERATURE:0.0}
   prompt_manifest: src/task_closed_loop/prompts/manifest.yml
-
   gemini:
     api_key_env: GEMINI_API_KEY
-
+  # Stage 3/4/6/7 走本地 gemini CLI 时使用。
+  # CLI 认证独立于本项目：不向子进程传递任何项目凭据，
+  # CLI 使用自己已登录的账号与独立配额。
+  gemini_cli:
+    command: ${GEMINI_CLI_COMMAND:gemini}
+    # plan 需要 CLI 开启 experimental.plan，否则会告警并回退到 default。
+    approval_mode: ${GEMINI_CLI_APPROVAL_MODE:default}
+    timeout_seconds: ${GEMINI_CLI_TIMEOUT_SECONDS:300}
+    max_retries: ${GEMINI_CLI_MAX_RETRIES:2}
+  # Stage 3/4/6/7 走本地 codex CLI 时使用。
+  # codex exec 用 --output-schema 原生约束结构，用 --output-last-message 取结果。
+  # 注意：codex exec 失败时退出码仍为 0，成功与否以是否写出结果为准。
+  codex_cli:
+    command: ${CODEX_CLI_COMMAND:codex}
+    sandbox: ${CODEX_CLI_SANDBOX:read-only}
+    timeout_seconds: ${CODEX_CLI_TIMEOUT_SECONDS:600}
+    max_retries: ${CODEX_CLI_MAX_RETRIES:2}
+    # 任务推理不应受本地 execpolicy .rules 影响。
+    ignore_rules: ${CODEX_CLI_IGNORE_RULES:true}
+    ignore_user_config: ${CODEX_CLI_IGNORE_USER_CONFIG:false}
+  gemma:
+    thinking_level: ${GEMMA_THINKING_LEVEL:high}
+    max_output_tokens: ${GEMMA_MAX_OUTPUT_TOKENS}
   ollama:
     base_url: ${OLLAMA_BASE_URL:http://127.0.0.1:11434}
     timeout_seconds: ${OLLAMA_TIMEOUT_SECONDS:120}
     keep_alive: ${OLLAMA_KEEP_ALIVE:5m}
     think: ${OLLAMA_THINK:false}
-
   lmstudio:
     base_url: ${LMSTUDIO_BASE_URL:http://127.0.0.1:1234/v1}
     timeout_seconds: ${LMSTUDIO_TIMEOUT_SECONDS:120}
     max_tokens: ${LMSTUDIO_MAX_TOKENS}
     api_key: ${LMSTUDIO_API_KEY}
-
   roles:
     reality_builder: reality_builder
     existing_task_continuity: existing_task_continuity
@@ -47,3 +50,15 @@ llm:
     task_candidate_audit: task_candidate_destructive_audit
     task_candidate_set_audit: task_candidate_set_audit
     task_reality_validity: task_reality_validity
+  openai:
+    base_url: ${OPENAI_BASE_URL:https://api.openai.com/v1}
+    timeout_seconds: ${OPENAI_TIMEOUT_SECONDS:120}
+    max_tokens: ${OPENAI_MAX_TOKENS}
+    api_key: ${OPENAI_API_KEY}
+  deepseek:
+    base_url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
+    timeout_seconds: ${DEEPSEEK_TIMEOUT_SECONDS:120}
+    max_tokens: ${DEEPSEEK_MAX_TOKENS}
+    api_key: ${DEEPSEEK_API_KEY}
+    thinking: ${DEEPSEEK_THINKING:enabled}
+    reasoning_effort: ${DEEPSEEK_REASONING_EFFORT:high}

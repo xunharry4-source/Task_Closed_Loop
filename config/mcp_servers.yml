@@ -52,8 +52,8 @@ mcp:
 #         - -y
 #         - your-gmail-mcp-server
 #       env:
-#         GOOGLE_命令参数入口ENT_ID: ${GOOGLE_命令参数入口ENT_ID}
-#         GOOGLE_命令参数入口ENT_SECRET: ${GOOGLE_命令参数入口ENT_SECRET}
+#         GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+#         GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
 #
 # ============================================================
 # Tool 作为 Resource 的示例

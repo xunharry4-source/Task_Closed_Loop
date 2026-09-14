@@ -59,6 +59,9 @@ def check_dependencies() -> None:
 def main() -> None:
     check_dependencies()
 
+    # Stage 1 (CLI Project check/repair) and Stage 2 (Resource & Capability
+    # materialization) run inside the runtime itself, so `start.py` and
+    # `python -m task_closed_loop.app.runtime` follow the identical production order.
     from task_closed_loop.app.runtime import main as runtime_main
     from task_closed_loop.app.runner import run
 

@@ -1,0 +1,101 @@
+architecture_contract:
+  id: task_closed_loop_production_pipeline
+  version: 1.2
+  locked: true
+
+  code_boundaries:
+    pipeline_module: src/task_closed_loop/pipeline/production.py
+    contracts_root: src/task_closed_loop/contracts
+    implementations_root: src/task_closed_loop/implementations
+    composition_module: src/task_closed_loop/implementations/composition.py
+    rules:
+      - pipeline_imports_contracts_only
+      - contracts_never_import_implementations
+      - runtime_is_composition_root_only
+      - behavior_changes_modify_implementations_not_pipeline
+      - architecture_changes_require_contract_version_bump
+
+  cli_project:
+    default_directory: cli_project
+    template_directory: cli_project_template
+    generated_directory: generated
+    analysis_directory: analysis
+    required_analysis_subdirectories:
+      - analysis/resources
+      - analysis/functions
+      - analysis/results
+    stage_1:
+      when_missing: copy_template
+      when_valid: reuse
+      when_invalid: repair_with_cli_in_place
+
+  stage_2:
+    config_file: config/preflight_sources.yml
+    input_sections:
+      - local_resources
+      - remote_resources
+      - functions
+    cli_working_directory: cli_project
+    code_locations:
+      resource_analysis: analysis/resources
+      function_analysis: analysis/functions
+      function_connectors: connectors
+      entrypoint: analysis/main.py
+    analysis_outputs:
+      resource_analysis: analysis/results/resources.analysis.yml
+      function_analysis: analysis/results/functions.analysis.yml
+    standard_outputs:
+      resources: generated/resources.generated.yml
+      capabilities: generated/capabilities.generated.yml
+
+  task_files:
+    initial: generated/tasks.initial.yml
+    audited: generated/tasks.audited.yml
+    dimensions: generated/task_dimensions.yml
+    regenerated_pattern: generated/tasks.regenerated.round_{round}.yml
+    final: generated/tasks.final.yml
+
+  stages:
+    - number: 1
+      id: cli_project_check
+      contract: CliProjectManager
+      implementation_family: implementations.cli_project
+    - number: 2
+      id: resource_capability_materialization
+      contract: ResourceCapabilityAnalyzer
+      implementation_family: implementations.resource_analysis
+    - number: 3
+      id: initial_task_generation
+      contract: InitialTaskGenerator
+      implementation_family: implementations.task_generation
+    - number: 4
+      id: task_audit
+      contract: TaskAuditor
+      implementation_family: implementations.task_audit
+    - number: 5
+      id: qualified_task_count_check
+      contract: TaskCountPolicy
+      implementation_family: implementations.task_count
+    - number: 6
+      id: task_dimension_generation
+      contract: TaskDimensionGenerator
+      implementation_family: implementations.task_dimensions
+      condition: qualified_tasks_too_few
+    - number: 7
+      id: task_regeneration
+      contract: TaskRegenerator
+      implementation_family: implementations.task_regeneration
+      condition: dimensions_exist
+      returns_to_stage: 4
+
+  invariants:
+    - stage_1_and_2_must_finish_before_stage_3
+    - stage_3_generation_and_stage_4_audit_are_distinct_calls
+    - stage_5_counts_only_stage_4_accepted_business_tasks
+    - stage_6_runs_only_when_stage_5_is_too_few
+    - stage_7_uses_resources_capabilities_valid_tasks_and_dimensions
+    - stage_7_tasks_must_return_to_stage_4
+    - cli_authored_stage_2_code_lives_and_evolves_inside_cli_project
+    - task_layer_reads_only_standard_resource_and_capability_files
+    - pipeline_depends_on_contracts_not_concrete_implementations
+    - future_behavior_changes_replace_or_modify_implementations

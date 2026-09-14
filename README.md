@@ -1,308 +1,222 @@
 # Task Closed-Loop Python
 
-## 本地运行
+当前发布版本：**V1.3｜Implementation Hardening**  
+冻结架构版本：**Architecture Contract V1.2 / Architecture Locked**
 
-Windows：
+V1.3 **没有修改 7 Stage 总架构**。本次只修接口实现、CLI 适配和边界验证；以后普通功能修复继续遵守“**改 implementation，不改 Pipeline**”。
 
-```text
-start.py
-test.py
-```
-
-命令行：
-
-```bash
-python start.py
-python test.py
-```
-
-直接使用本地已经安装好的 Python/依赖。
-
-
-## 启动
-
-```bash
-pip install -r requirements.txt
-python start.py
-```
-
-
-Python 版闭环任务系统骨架。
-
-## V0.5 新增
-
-- 真正实现 Task Generation Pipeline
-- Resource 不再携带预制 `task_candidate`
-- Task Discovery
-- Candidate Destructive Audit
-- Candidate Set Audit
-- Deterministic Finalizer
-- Finalizer Fidelity Audit
-- Task Reality Validity Audit
-- `任务生成机制.md`
-
-- 真正实现 R1–R5 破坏式审查
-- `审查机制.md`
-- DiagnosticSnapshot / DiagnosticFinding / DiagnosticReport
-- 五类独立 Reviewer + 汇总 Runner
-
-- 项目架构.md
-- 启动说明.md
-- YAML 文件内字段级中文说明
-
-- 正式依赖文件
-- YAML 配置系统
-- `config/default.yml`
-- `config/runtime.yml`
-- `config/providers.yml`
-- `config/diagnostics.yml`
-- YAML 配置加载与深层合并
-- Provider Registry 由 YAML 装配
-- 启动入口读取 YAML
-- ZIP 清理 `__pycache__`
-
-## 依赖
-
-### 核心依赖
-
-```bash
-pip install -r requirements.txt
-```
-
-当前核心只有：
+## 固定生产流程
 
 ```text
-PyYAML
+Stage 1  检查 CLI Project
+         missing -> Host 复制 cli_project_template/
+         valid   -> 直接复用
+         invalid -> READY CLI 在原目录 repair
+            ↓
+Stage 2  资源与功能分析
+         local_resources / remote_resources / functions
+         CLI 直接在 cli_project/ 内持续生成、维护扫描/调用代码
+         Host 执行这些代码并验证 Evidence / Provenance
+         -> resources.generated.yml
+         -> capabilities.generated.yml
+            ↓
+Stage 3  Task CLI/API 根据标准 Resource + Capability 生成未审查任务
+            ↓
+Stage 4  Audit CLI/API 独立审查任务是否合理
+            ↓
+Stage 5  只统计通过审查的业务 Task；检查是否过少
+         enough -> 完成
+         too few
+            ↓
+Stage 6  Task CLI/API 生成 Task Dimensions
+            ↓
+Stage 7  根据 Dimensions 重新生成 Task
+            ↓
+         所有新 Task 回到 Stage 4 审查
 ```
 
-因为 Runtime Core 使用 Python 标准库，YAML 是正式配置格式。
+Stage 1–2 没完成时，Stage 3 不得开始。Capability Build / Execute 属于审查通过后的执行闭环，不得插入这 7 Stage 改变任务生产顺序。
 
-### 开发依赖
+长期业务语义保持不变：Task Discovery 基于 **Resource + Capability** 发现尚未利用的现实工作关系，**一份完整、当前、正常的数据仍然可能**产生分析、比较、验证、优化或机会发现 Task，**不是“没有异常所以没有 Task”**。Reality 是当前现实摘要，不是原始 Resources 的替代品。
 
-```bash
-pip install -r requirements-dev.txt
-```
-
-### 可选真实 Provider / LLM 依赖
-
-```bash
-pip install -r requirements-optional.txt
-```
-
-也可以按 `pyproject.toml` extras 安装：
-
-```bash
-pip install -e ".[openai]"
-pip install -e ".[google]"
-pip install -e ".[http]"
-pip install -e ".[dev]"
-```
-
-## YAML 配置
-
-启动默认读取：
+## 架构冻结
 
 ```text
-config/default.yml
+src/task_closed_loop/
+├── pipeline/           # 冻结：7 Stage 顺序
+├── contracts/          # 冻结：阶段接口/DTO
+├── implementations/    # 普通功能修改主要发生在这里
+├── preflight/          # Stage 2 扫描/调用/标准化底层
+├── llm/                # CLI/API/模型底层
+├── tasks/              # Task 领域能力
+└── capability_runtime/ # CLI 与 Capability 执行底层
 ```
 
-然后自动合并：
+正式 Pipeline 只依赖 `contracts/`。`runtime.py` 只是 Composition Root，负责选择实现并注入 Pipeline。
+
+普通修复默认只改：
+
+- CLI Project：`implementations/cli_project/`
+- 资源/Gmail/网盘/数据库/API 分析：`implementations/resource_analysis/` + `preflight/`
+- Task 生成：`implementations/task_generation/` + Prompt
+- Task 审查：`implementations/task_audit/`
+- Task 数量策略：`implementations/task_count/`
+- Task Dimensions：`implementations/task_dimensions/`
+- 补充任务：`implementations/task_regeneration/`
+- CLI 行为：`capability_runtime/cli/`
+
+只有明确进行架构升级时才允许修改 `pipeline/`、核心 `contracts/` 和 `config/architecture_contract.yml`。
+
+## Stage 1：CLI Project
+
+默认长期工作目录：
 
 ```text
-config/runtime.yml
-config/providers.yml
-config/diagnostics.yml
+<task-closed-loop>/cli_project/
 ```
 
-### Provider 配置示例
+固定行为：
+
+- 不存在：Host 复制 `cli_project_template/`；
+- 已存在且结构正确：直接复用，不调用 CLI；
+- 已存在但结构错误：调用真正 `READY` 的 CLI 在原目录修复；Host 只重新验证结构；
+- 默认 CLI 失败时继续尝试下一个 `READY` CLI；用户显式指定 Engine 时不偷偷换 Engine。
+
+CLI 状态区分：`MISSING / INSTALLED / NEEDS_AUTH / UNHEALTHY / READY`。`--version` 只能证明 CLI 已安装，不能证明可用；READY 还必须通过非交互认证/健康探测。
+
+## Stage 2：真实资源与功能分析
+
+正式配置位于 `config/preflight_sources.yml`，结构固定为：
 
 ```yaml
-providers:
-  mock:
-    enabled: true
-    adapter: task_closed_loop.adapters.mock:MockProvider
+preflight_inputs:
+  local_resources: []
+  remote_resources: []
+  functions: []
 ```
 
-新增 Provider 时，Core 不需要改动，只需要：
+CLI 必须直接在长期 `cli_project/` 内生成和维护实际代码，例如：
 
-1. 实现对应 Port。
-2. 在 `providers.yml` 注册 Adapter。
-3. 安装该 Provider 所需可选依赖。
+```text
+cli_project/analysis/main.py
+cli_project/analysis/resources/
+cli_project/analysis/functions/
+cli_project/connectors/
+```
 
-## 运行
+Host 使用隔离 Python 执行入口，并显式加入 `analysis/` 与 `cli_project/` 两个允许的 module root，因此 CLI 可以正常生成多文件模块，而不是只能把全部逻辑塞进单个 `main.py`。
+
+### Evidence / Truth Gate
+
+Stage 2 不再接受“CLI 说这里有数据”作为事实。
+
+- 本地目录：Host 自己重新扫描目录，生成文件数、目录数、相对文件树和 SHA-256 tree digest；CLI 自报的本地 evidence 不作为事实来源。
+- Remote Resource / Function：必须返回结构化 Evidence，包含 `evidence_id / source_type / source_id / operation / status / observed_via`，以及 `raw_observation` 或位于 `cli_project/artifacts/preflight/` 的实际 artifact。
+- 必须声明真实落地的 `implementation_files`，且文件必须位于 `cli_project/` 并实际存在。
+- `availability_status` 必须显式为 `available / unavailable / failed`；最终标准 Resource/Capability 的 `availability` 必须与来源分析状态一致。
+- 标准 Resource 必须通过 `metadata.source_input_ids` 关联 Stage 2 输入；标准 Capability 必须通过 `metadata.source_function_id` 关联 Function；Host 自动绑定 Evidence IDs。
+- 没有 Evidence、只有文字总结、引用不存在的实现文件或 artifact、报告配置之外的 operation，都禁止进入 Stage 3。
+
+Remote Evidence 是“真实执行留下的、Host 可检查的执行记录”，不是对互联网/第三方系统做密码学证明。对于高风险写操作，后续 Capability Runtime 仍需要独立 read-back / Host Verification。
+
+标准输出固定为：
+
+```text
+cli_project/analysis/results/resources.analysis.yml
+cli_project/analysis/results/functions.analysis.yml
+cli_project/generated/resources.generated.yml
+cli_project/generated/capabilities.generated.yml
+```
+
+## Stage 2 → Stage 3 边界
+
+Stage 3 只读取标准化、已经物化的 Resource + Capability。原始路径、URI、连接参数和对象引用属于 Preflight 的 **Resource Reference**；Task Runtime 不接受未物化 Resource Reference。
+
+Task Loader 会递归拒绝 Resource payload 和 Capability scope 中的原始定位/连接/凭据信息，例如：
+
+```text
+path / URI / URL / DSN / connection string / password / token / api_key / secret
+```
+
+但真实内容字段（如邮件正文）可以自然包含 URL 文本；这不会被误判为连接配置。
+
+正式生产中，Stage 2 已经完成 Gmail/DB/Drive 等现实采集，所以 Stage 3 会关闭旧 TaskGenerationEngine 的 `Observation Acquisition` 触发，防止再次生成“先读取邮箱/数据库”的重复感知 Task。Task-only/lifecycle 测试仍保留原 Observation Acquisition 能力。
+
+## Stage 3–7
+
+- **Stage 3**：只生成未审查 Task Candidate；不 Audit，不生成 Dimensions。
+- **Stage 4**：独立 Task Audit。
+- **Stage 5**：只统计 Stage 4 通过的业务 Task；Observation Task 不能拿来凑数量。
+- **Stage 6**：只有 Stage 5 判定任务过少才生成 Task Dimensions。
+- **Stage 7**：基于 Resource + Capability + 已通过 Task + Dimensions 生成补充 Task；所有新 Candidate 强制回 Stage 4。
+
+## CLI 支持与 fallback
+
+Capability Runtime 当前包含 Codex CLI、Gemini CLI、Claude CLI Adapter。
+
+- Codex：使用登录状态探测，不把 `--version` 当 READY。
+- Claude：使用 `claude auth status`；正常执行不使用 `--bare`，因此可沿用用户已登录的 Profile/OAuth。
+- Gemini：使用极小 headless 请求验证当前凭据确实能服务请求。
+- 默认模式按配置顺序选择 READY CLI；一个 READY CLI 在 Stage 1/2 实际执行失败时，可继续 fallback 到下一个 READY CLI。
+
+安装、登录和账户授权仍由用户/环境预先完成；Task Closed Loop 不自动安装 CLI、不自动登录、不修改全局凭据。
+
+## Secret
+
+按项目固定要求，真实 Secret Value 只写入：
+
+```text
+cli_project/.env
+```
+
+**禁止**把 Password / Token / API Key 注入系统环境变量或子进程环境变量。配置文件只写 `secret_refs`。
+
+Stage 2/Capability Runtime 由 Host 从 `.env` 读取声明过的 Secret，并通过结构化执行输入交给代码；不会把 Secret 设置进 `os.environ`。输出代码、Evidence、分析文件、标准 Resource/Capability 文件不得持久化 Secret Value。
+
+因为 CLI 本身按架构直接工作在 `cli_project/`，`.env` 与 CLI 工作项目处于同一项目范围；V1.3 不虚假声称这里已经存在 OS 级文件隔离。若以后需要“CLI 连 `.env` 文件都不能读”，那属于单独的真实 Sandbox/权限架构升级。
+
+## Task 生产后的执行闭环
+
+```text
+Accepted Task
+→ Existing Capability?
+→ 缺能力时 CLI 在 cli_project/ 创建/扩展能力代码
+→ Test / Promote / Registry
+→ Execute
+→ Host Verification / read-back
+→ TaskOutcomeRecord
+→ 后续 Reality / Proliferation
+```
+
+CLI 自己输出 `success/done` 不等于执行正确；可信结果由 Host Verification 决定。
+
+## 模型 / CLI 支持
+
+Task/Audit LLM 适配仍保留：`gemini / gemma / ollama / lmstudio / openai / deepseek`，并保留 `codex_cli / gemini_cli / claude_cli` CLI 路径。Stage 3/6/7 使用 Task Profile，Stage 4 使用独立 Audit Profile。
+
+## 本地 Task-only 测试
+
+可以跳过 Stage 1–2，直接读取人工标准输入。入口配置仍为 `config/task_inputs.yml`：
+
+```text
+config/task_layer_test/resources.yml
+config/task_layer_test/capabilities.yml
+```
+
+这是测试入口，不是正式生产旁路。
+
+## 启动与测试
 
 ```bash
 pip install -r requirements.txt
-PYTHONPATH=src python -m task_closed_loop.app.runtime
+pip install -r requirements-dev.txt
+python start.py
 ```
 
-## 测试
+全量回归：
 
 ```bash
-PYTHONPATH=src python -m unittest discover -s tests -v
+PYTHONPATH=src pytest -q -p no:cacheprovider
 ```
 
-## 架构边界
-
-- Resource / Capability = Ports
-- External Systems = Adapters
-- Provider Registry = YAML 装配
-- Reality Engine 不读取 Existing Tasks
-- Task Continuity 在 Current Reality 建立后运行
-- R1–R5 留在 Offline Diagnostics
-
-## 添加 Resource / Capability
-
-详细说明：
-
-```text
-资源与能力扩展说明.md
-开发扩展速查.md
-```
-
-其中包含 Fake 测试、真实 Adapter、YAML 注册、Secret、Existing Task、Effect 回流和测试示例。
-
-
-
-## LLM 配置
-
-正式 Runtime 必须显式配置 LLM。
-
-当前支持 Gemini 与 Ollama。
-
-```env
-LLM_ADAPTER=ollama
-LLM_MODEL=<ollama model>
-```
-
-正式 Runtime 中已经移除 FakeLLM / MockLLM。
-
-使用真实 LLM 测 Resource / Capability：
-
-```text
-修改 config/test_resources.yml + config/test_capabilities.yml
-运行 test_runtime.py
-```
-
-详细见 `测试Resource与Capability配置说明.md`。
-
-
-## Gemini
-
-Google Gen AI SDK：
-
-```bash
-pip install -U google-genai
-```
-
-配置示例：
-
-```env
-LLM_ADAPTER=gemini
-LLM_MODEL=gemini-3.6-flash
-GEMINI_API_KEY=<secret>
-```
-
-项目使用 `client.interactions.create(...)`。
-
-详细见：
-
-```text
-Gemini配置与测试说明.md
-```
-
-
-## 最简单的本地 Prompt 测试
-
-1. 配置 Gemini 或 Ollama。
-2. 只修改：
-
-```text
-config/test_resources.yml + config/test_capabilities.yml
-```
-
-3. 运行：
-
-```text
-test_runtime.py
-```
-
-Resource / Capability 测试不需要修改 Python，也不需要 Scenario。
-
-详细见：
-
-```text
-测试Resource与Capability配置说明.md
-```
-
-
-## Resource / Capability 的两个入口
-
-### 本地测试
-
-Resource：
-
-```text
-config/test_resources.yml
-```
-
-Capability：
-
-```text
-config/test_capabilities.yml
-```
-
-运行：
-
-```text
-test_runtime.py
-```
-
-### 真实外部系统
-
-```text
-config/mcp_servers.yml
-```
-
-MCP `resources` 自动成为 Resource，MCP `tools` 自动成为 Capability。
-
-
-## Python 入口
-
-正式运行：
-
-```text
-start.py
-```
-
-真实 LLM + 测试 Resource / Capability：
-
-```text
-test_runtime.py
-```
-
-自动回归：
-
-```text
-test.py
-```
-
-三个入口彼此独立，不通过运行参数切换。
-
-
-
-## LM Studio
-
-LLM Adapter：
-
-```env
-LLM_ADAPTER=lmstudio
-LLM_MODEL=<LM Studio /v1/models 返回的模型 id>
-LMSTUDIO_BASE_URL=http://127.0.0.1:1234/v1
-```
-
-详细见：
-
-```text
-LM Studio配置与测试说明.md
-```
+项目只维护两份人工说明文档：`README.md` 与 `ARCHITECTURE.md`。Prompt `.md` 属于 Runtime 资产，不计入人工文档。

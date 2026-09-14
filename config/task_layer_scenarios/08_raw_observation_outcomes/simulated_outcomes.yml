@@ -1,0 +1,80 @@
+outcomes:
+  - state_domain: mailbox_current_state
+    outcome_status: completed
+    result_summary: "Mailbox observation returned two concrete messages; no business tasks are pre-authored in this fixture."
+    evidence_refs:
+      - gmail:message:quote-001
+      - gmail:message:contract-002
+    subject_refs:
+      - gmail:message:quote-001
+      - gmail:message:contract-002
+    payload:
+      observed_messages:
+        - message_id: quote-001
+          sender: buyer@example.com
+          subject: "Revise quotation before tomorrow 15:00"
+          body: "Please revise our quotation for 500 units. We need the unit price changed from 12.50 to 11.90 and the revised quotation back before tomorrow at 15:00."
+        - message_id: contract-002
+          sender: legal@example.com
+          subject: "Contract signature page missing"
+          body: "The contract package you returned is missing the signed signature page. Please correct the package today."
+
+  - state_domain: database_current_state
+    outcome_status: completed
+    result_summary: "Database observation returned current payment and order facts; no task labels are supplied."
+    evidence_refs:
+      - db:metric:payment_failure_7d
+      - db:anomaly:duplicate_orders_2026-09-14
+    subject_refs:
+      - db:metric:payment_failure_7d
+      - db:anomaly:duplicate_orders_2026-09-14
+    payload:
+      payment_metrics:
+        previous_failure_rate: 0.021
+        current_failure_rate: 0.089
+        concentrated_gateway: stripe_eu
+        dominant_error_codes:
+          timeout: 61
+          authentication_failed: 18
+      order_observation:
+        duplicate_order_count: 37
+        time_window: "2026-09-14T08:00:00Z/2026-09-14T10:00:00Z"
+        common_creation_source: checkout_retry
+
+  - state_domain: cloud_drive_current_state
+    outcome_status: completed
+    result_summary: "Drive observation returned two newly relevant files with their actual content summaries."
+    evidence_refs:
+      - drive:file:requirements_v8
+      - drive:file:customer_feedback_week37
+    subject_refs:
+      - drive:file:requirements_v8
+      - drive:file:customer_feedback_week37
+    payload:
+      observed_files:
+        - file_id: requirements_v8
+          logical_name: requirements_v8.md
+          content_summary: "Version 8 adds enterprise SSO and changes onboarding approval rules. Current implementation notes still reference version 7."
+        - file_id: customer_feedback_week37
+          logical_name: customer_feedback_week37.csv
+          content_summary: "143 new feedback rows. Repeated themes include SSO requests, onboarding approval delays, and payment retry confusion."
+
+  - state_domain: calendar_current_state
+    outcome_status: completed
+    result_summary: "Calendar observation returned two dated commitments without prewriting follow-up tasks."
+    evidence_refs:
+      - calendar:event:customer-review-2026-09-15
+      - calendar:event:filing-deadline-2026-09-18
+    subject_refs:
+      - calendar:event:customer-review-2026-09-15
+      - calendar:event:filing-deadline-2026-09-18
+    payload:
+      observed_events:
+        - event_id: customer-review-2026-09-15
+          start: "2026-09-15T14:00:00+01:00"
+          title: "Customer quarterly review"
+          notes: "Agenda requires delivery-status summary, open risks, and next-quarter commitments."
+        - event_id: filing-deadline-2026-09-18
+          start: "2026-09-18T17:00:00+01:00"
+          title: "Regulatory filing deadline"
+          notes: "Submission must include the current-quarter compliance statement."

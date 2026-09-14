@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "task-closed-loop"
-version = "0.21.0"
+version = "1.2.0"
 description = "Interface-driven closed-loop AI task runtime"
 readme = "README.md"
 requires-python = ">=3.11"

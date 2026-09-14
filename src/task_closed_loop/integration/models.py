@@ -50,6 +50,13 @@ class CapabilityDescriptor:
     availability: str = 'available'
     description: str | None = None
     input_schema: dict[str, Any] = field(default_factory=dict)
+    # Some capabilities can actively observe/query a state domain whose concrete
+    # objects are not materialized as Resources yet (mailbox, database, file store,
+    # calendar, web, etc.).  This is distinct from a Resource: it authorizes a probe
+    # of current reality, but does not assert that any particular object exists.
+    can_observe_state: bool = False
+    observable_state: str | None = None
+    observation_operations: tuple[str, ...] = ()
     observed_at: datetime = field(default_factory=utc_now)
 
 @dataclass(frozen=True)
