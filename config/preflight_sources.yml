@@ -6,22 +6,47 @@ preflight_inputs:
   cli:
     # Empty means: select the first READY engine from execution.capability_project.allowed_cli_engines.
     engine: ${PREFLIGHT_CLI_ENGINE:}
-    timeout_seconds: ${PREFLIGHT_CLI_TIMEOUT_SECONDS:900}
 
-  analysis_timeout_seconds: ${PREFLIGHT_ANALYSIS_TIMEOUT_SECONDS:600}
+  # 本地资源目录。相对路径相对 task-closed-loop 项目根目录解析；目录不存在时 Stage 2 拒绝启动。
+  #
+  # description 必填，由你填写：
+  #   用一句话说明【这是什么】——属于什么业务、什么系统、什么用途。
+  #   不要写里面有哪些数据、什么结构、哪些字段、有什么问题——
+  #   那些由 Stage 2 实际扫描后给出，写进来只会污染分析结果。
+  #
+  #   好：美股历史行情与交易数据，持续更新。
+  #   好：公司合同与法务文档归档目录。
+  #   差：里面有 30 个标的的日线 CSV，其中 TSLA 缺 3 天。   ← 这是 Stage 2 该发现的
+  local_resources:
+    - id: trading_data
+      directory: /Users/harry/Documents/git/trading_data
+      description: 美股历史行情与交易数据，持续更新。
 
-  # Local resource directories. Relative paths resolve from the task-closed-loop
-  # project root. Stage 2 refuses to start if a configured directory does not exist.
-  local_resources: []
-
-  # Remote resource scopes such as a cloud-drive folder. Each entry must reference
-  # one configured function_id that knows how to access the remote system.
+  # 远端资源作用域，例如网盘的某个目录。每条必须通过 function_id 引用一个已配置的功能。
+  # description 必填，规则同上：一句话说明这是什么，不写里面有什么。
   remote_resources: []
 
-  # Actual external functions/systems: Gmail, cloud drive, database, API, calendar,
-  # etc. Real credentials are stored only in cli_project/.env. This file names only
-  # secret_refs; it must never inline password/token/DSN/connection_string values.
-  functions: []
+  # 真实的外部功能/系统：Gmail、网盘、数据库、API、日历、命令行工具等。
+  # 真实凭据只存放在 cli_project/.env；本文件只写 secret_refs，
+  # 禁止内联 password / token / DSN / connection_string 等值。
+  #
+  # description 必填，由你填写：
+  #   用一句话说明【这是什么功能】。
+  #   不要写它能做哪些操作、哪些当前可用——那些由 Stage 2 实际探测后给出。
+  #
+  #   好：本地 codex 命令行编码代理，可编写并执行代码来处理已取得的数据。
+  #   好：公司主邮箱，已授权读取。
+  #   差：支持 search_messages / read_message / send_message 三个操作。  ← 这是 Stage 2 该探测的
+  #
+  # operations 留空 = 不限制 Stage 2 能报告哪些操作（推荐）。
+  # 填了就是白名单：Stage 2 报告清单以外的操作会被直接拒绝。
+  functions:
+    - id: codex_cli
+      kind: coding_agent_cli
+      description: 本地 codex 命令行编码代理，可编写并执行代码来处理和分析已取得的数据。
+      operations: []
+      config:
+        command: codex
 
 # Example (commented):
 # preflight_inputs:

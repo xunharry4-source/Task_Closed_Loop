@@ -28,7 +28,9 @@ from task_closed_loop.capability_runtime.cli.claude import ClaudeCliAdapter
 from task_closed_loop.capability_runtime.cli.codex import CodexCliAdapter
 from task_closed_loop.capability_runtime.cli.gemini import GeminiCliAdapter
 from task_closed_loop.capability_runtime.cli.router import CliEngineRouter
+from task_closed_loop.capability_runtime.errors import CliEngineError
 from task_closed_loop.capability_runtime.secrets import DotEnvSecretResolver
+from task_closed_loop.diagnostics.logging import runtime_logger
 
 from .models import PreflightCapabilityRecord, PreflightResourceRecord
 from .writer import write_preflight_files
@@ -187,6 +189,87 @@ class PreflightSource:
         }
 
 
+
+def _cli_progress_reporter(label: str):
+    """Report what the CLI is actually doing, one readable line at a time.
+
+    `codex exec --json` emits an event per line and carries the detail in a nested
+    `item`. Only events that say something about the work are reported: running a
+    command, writing a file, what the agent said, and errors. Lifecycle chatter
+    (`item.started`, `turn.started`, ...) is dropped so the signal stays visible.
+    """
+
+    logger = runtime_logger()
+
+    def report(stream: str, line: str) -> None:
+        text = line.strip()
+        if not text:
+            return
+
+        if not text.startswith("{"):
+            logger.info("stage2.cli[%s] %s", label, text[:200])
+            return
+
+        try:
+            event = json.loads(text)
+        except json.JSONDecodeError:
+            return
+        if not isinstance(event, dict):
+            return
+
+        # Only completed work carries a result worth showing.
+        if str(event.get("type") or "") != "item.completed":
+            return
+        item = event.get("item")
+        if not isinstance(item, dict):
+            return
+
+        kind = str(item.get("type") or "").strip()
+        if kind == "command_execution":
+            command = str(item.get("command") or "").strip()
+            exit_code = item.get("exit_code")
+            detail = f"$ {command}"
+            if exit_code not in (None, 0):
+                detail += f"  (exit={exit_code})"
+        elif kind in {"agent_message", "reasoning"}:
+            detail = " ".join(str(item.get("text") or "").split())
+        elif kind == "error":
+            detail = "ERROR " + " ".join(str(item.get("message") or "").split())
+        elif kind in {"file_change", "patch_apply"}:
+            changed = item.get("path") or item.get("files") or item.get("changes")
+            detail = f"写入 {changed}"
+        else:
+            return
+
+        detail = detail.strip()
+        if not detail:
+            return
+        if len(detail) > 180:
+            detail = detail[:180] + "…"
+        logger.info("stage2.cli[%s] %s", label, detail)
+
+    return report
+
+
+def _required_description(raw: dict, *, section: str, item_id: str) -> str:
+    """Stage 2 needs one human sentence saying what this input is.
+
+    The user writes it. Without it the CLI can only guess from an id or a directory
+    name, and a wrong guess sends the whole analysis in the wrong direction. It is a
+    one-line statement of *what this is* — never a description of what is inside it,
+    which is exactly what Stage 2 must go and find out.
+    """
+
+    text = str(raw.get("description") or "").strip()
+    if not text:
+        raise PreflightSourceConfigurationError(
+            f"{section} '{item_id}' 缺少 description。请用一句话说明它是什么"
+            "（例如它属于什么业务、什么系统、什么用途）；不要写里面有哪些内容、"
+            "哪些字段、哪些操作——那些由 Stage 2 分析后给出。"
+        )
+    return text
+
+
 def _unique_id(raw: dict, *, section: str, index: int, key: str = "id") -> str:
     value = str(raw.get(key) or "").strip()
     if not value:
@@ -245,7 +328,9 @@ def load_preflight_inputs(config: dict, *, project_root: str | Path) -> Prefligh
             LocalResourceInput(
                 input_id=input_id,
                 directory=str(resolved),
-                description=str(item.get("description") or "").strip(),
+                description=_required_description(
+                    item, section="local_resources", item_id=input_id
+                ),
                 metadata=dict(item.get("metadata") or {}),
             )
         )
@@ -267,7 +352,9 @@ def load_preflight_inputs(config: dict, *, project_root: str | Path) -> Prefligh
             FunctionInput(
                 function_id=function_id,
                 kind=kind,
-                description=str(item.get("description") or "").strip(),
+                description=_required_description(
+                    item, section="functions", item_id=function_id
+                ),
                 secret_refs=tuple(str(v).strip() for v in (item.get("secret_refs") or []) if str(v).strip()),
                 operations=tuple(str(v).strip() for v in (item.get("operations") or []) if str(v).strip()),
                 scope=dict(item.get("scope") or {}),
@@ -300,7 +387,9 @@ def load_preflight_inputs(config: dict, *, project_root: str | Path) -> Prefligh
                 kind=kind,
                 function_id=function_id,
                 scope=dict(item.get("scope") or {}),
-                description=str(item.get("description") or "").strip(),
+                description=_required_description(
+                    item, section="remote_resources", item_id=input_id
+                ),
                 metadata=dict(item.get("metadata") or {}),
             )
         )
@@ -373,8 +462,6 @@ class CliPreflightEngine:
         adapters: Iterable[CliEngineAdapter] | None = None,
         preferred_engines: Sequence[str] | None = None,
         secret_resolver=None,
-        cli_timeout_seconds: int = 900,
-        analysis_timeout_seconds: int = 600,
     ):
         self.project_root = Path(project_root).resolve()
         self.prompt_text = prompt_text
@@ -383,8 +470,6 @@ class CliPreflightEngine:
             preferred=list(preferred_engines) if preferred_engines else None,
         )
         self.secret_resolver = secret_resolver or DotEnvSecretResolver(self.project_root / ".env")
-        self.cli_timeout_seconds = int(cli_timeout_seconds)
-        self.analysis_timeout_seconds = int(analysis_timeout_seconds)
 
     @property
     def analysis_dir(self) -> Path:
@@ -414,6 +499,7 @@ class CliPreflightEngine:
         inputs: PreflightInputBundle | Sequence[PreflightSource],
         *,
         explicit_engine: str | None = None,
+        progress_label: str | None = None,
     ) -> str:
         """Call the CLI directly in the persistent cli_project and keep its code there."""
 
@@ -436,7 +522,10 @@ class CliPreflightEngine:
                     mode="build",
                     prompt=prompt,
                     cwd=self.project_root,
-                    timeout_seconds=self.cli_timeout_seconds,
+                    # Stage 2 has no time limit: analyzing a real system takes as
+                    # long as it takes, and a killed run produces nothing usable.
+                    timeout_seconds=None,
+                    on_output=_cli_progress_reporter(progress_label or adapter.engine_id),
                 )
             except Exception as exc:
                 failures.append(f"{adapter.engine_id}: {type(exc).__name__}: {exc}")
@@ -498,23 +587,18 @@ class CliPreflightEngine:
             },
             ensure_ascii=False,
         )
-        try:
-            proc = subprocess.run(
-                command,
-                input=payload,
-                cwd=str(self.analysis_dir),
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=self.analysis_timeout_seconds,
-                encoding="utf-8",
-                errors="replace",
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise PreflightAnalysisError(
-                f"Stage 2 分析代码执行超时（{self.analysis_timeout_seconds}s）。"
-            ) from exc
-
+        # No time limit: analyzing a real system takes as long as it takes, and a
+        # killed run produces nothing usable.
+        proc = subprocess.run(
+            command,
+            input=payload,
+            cwd=str(self.analysis_dir),
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
         try:
             message = json.loads(proc.stdout.strip() or "{}")
         except Exception as exc:
@@ -899,6 +983,172 @@ class CliPreflightEngine:
             encoding="utf-8",
         )
 
+    @staticmethod
+    def _split_units(
+        inputs: PreflightInputBundle,
+    ) -> list[tuple[str, PreflightInputBundle]]:
+        """One analysis unit per configured input.
+
+        A remote resource is validated against its function, so it travels in the
+        same unit as the function it depends on. Everything else stands alone.
+        """
+
+        units: list[tuple[str, PreflightInputBundle]] = []
+
+        for resource in inputs.local_resources:
+            units.append(
+                (
+                    f"local_resource:{resource.input_id}",
+                    PreflightInputBundle(local_resources=(resource,)),
+                )
+            )
+
+        for function in inputs.functions:
+            attached = tuple(
+                remote
+                for remote in inputs.remote_resources
+                if remote.function_id == function.function_id
+            )
+            units.append(
+                (
+                    f"function:{function.function_id}",
+                    PreflightInputBundle(functions=(function,), remote_resources=attached),
+                )
+            )
+
+        orphan = tuple(
+            remote
+            for remote in inputs.remote_resources
+            if not any(f.function_id == remote.function_id for f in inputs.functions)
+        )
+        for remote in orphan:
+            units.append(
+                (
+                    f"remote_resource:{remote.input_id}",
+                    PreflightInputBundle(remote_resources=(remote,)),
+                )
+            )
+
+        return units
+
+    @staticmethod
+    def _failed_unit_entry(
+        label: str,
+        unit: PreflightInputBundle,
+        message: str,
+    ) -> tuple[str, dict[str, Any] | None]:
+        """Record a failed unit so a configured input is never silently missing."""
+
+        if unit.functions:
+            return (
+                "function_analysis",
+                {
+                    "function_id": unit.functions[0].function_id,
+                    "availability_status": "failed",
+                    "implementation_files": [],
+                    "available_operations": [],
+                    "observed_data_summary": {},
+                    "can_observe_state": False,
+                    "observable_state": None,
+                    "target_scope": {},
+                    "evidence": [],
+                    "host_error": message,
+                },
+            )
+        if unit.local_resources or unit.remote_resources:
+            source = (unit.local_resources or unit.remote_resources)[0]
+            return (
+                "resource_analysis",
+                {
+                    "input_id": source.input_id,
+                    "availability_status": "failed",
+                    "implementation_files": [],
+                    "directory_structure": {},
+                    "data_summary": {},
+                    "content_summary": {},
+                    "evidence": [],
+                    "host_error": message,
+                },
+            )
+        return ("resource_analysis", None)
+
+    # -- incremental build state ------------------------------------------------
+
+    @property
+    def _build_state_path(self) -> Path:
+        return self.project_root / "state" / "stage2_build_state.yml"
+
+    def _unit_fingerprint(self, unit: PreflightInputBundle) -> str:
+        """Identity of what the CLI was last asked to build for this unit.
+
+        Covers the unit's configuration and the prompt itself, so changing either
+        forces the analysis code to be regenerated.
+        """
+
+        payload = json.dumps(
+            {"inputs": unit.to_payload(), "prompt": self.prompt_text},
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def _load_build_state(self) -> dict[str, Any]:
+        path = self._build_state_path
+        if not path.is_file():
+            return {}
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except yaml.YAMLError:
+            return {}
+        units = data.get("units")
+        return units if isinstance(units, dict) else {}
+
+    def _save_build_state(self, state: dict[str, Any]) -> None:
+        path = self._build_state_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            yaml.safe_dump(
+                {"schema_version": "1.0", "units": state},
+                allow_unicode=True,
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+
+    def _build_is_current(
+        self,
+        state: dict[str, Any],
+        label: str,
+        fingerprint: str,
+    ) -> bool:
+        """Whether the previously built code still matches this unit and is intact."""
+
+        record = state.get(label)
+        if not isinstance(record, dict):
+            return False
+        if str(record.get("fingerprint") or "") != fingerprint:
+            return False
+        if not self.has_analysis_code():
+            return False
+        # Every file the last successful analysis declared must still be present.
+        for relative in record.get("implementation_files") or []:
+            if not (self.project_root / str(relative)).is_file():
+                return False
+        return True
+
+    @staticmethod
+    def _declared_implementation_files(raw: dict[str, Any]) -> list[str]:
+        files: list[str] = []
+        for key in ("resource_analysis", "function_analysis"):
+            for item in raw.get(key) or []:
+                if not isinstance(item, dict):
+                    continue
+                for value in item.get("implementation_files") or []:
+                    text = str(value).strip()
+                    if text and text not in files:
+                        files.append(text)
+        return files
+
     def materialize(
         self,
         inputs: PreflightInputBundle,
@@ -910,13 +1160,80 @@ class CliPreflightEngine:
                 "Stage 2 没有任何配置输入；必须至少配置 local_resources / remote_resources / functions 之一。"
             )
 
-        # The locked architecture requires Stage 2 to call the CLI every production
-        # run so analysis/connector code can evolve with current configuration.
-        engine_id = self.build_analysis_code(inputs, explicit_engine=explicit_engine)
-        raw = self.run_analysis(inputs)
-        evidence_index = self._validate_analysis_coverage(raw, inputs)
-        self._bind_output_provenance(raw, inputs, evidence_index)
+        # One unit at a time, one step at a time. A single unreachable function or
+        # directory must not discard the analysis of everything else, and each
+        # build/run/validate step is observable on its own.
+        units = self._split_units(inputs)
+        logger = runtime_logger()
+        engine_id = ""
+        aggregated: dict[str, list] = {
+            "resource_analysis": [],
+            "function_analysis": [],
+            "resources": [],
+            "capabilities": [],
+        }
+        unit_failures: list[tuple[str, str]] = []
 
+        build_state = self._load_build_state()
+
+        for position, (label, unit) in enumerate(units, start=1):
+            logger.info("stage2.unit start %d/%d %s", position, len(units), label)
+            fingerprint = self._unit_fingerprint(unit)
+            try:
+                # The CLI must be called whenever this unit's configuration or the
+                # analysis prompt changed, so generated code follows configuration.
+                # Re-generating identical code every run only costs time.
+                if self._build_is_current(build_state, label, fingerprint):
+                    logger.info(
+                        "stage2.unit step=build reused (unchanged) %s", label
+                    )
+                    engine_id = (
+                        str(build_state[label].get("engine") or "") or engine_id
+                    )
+                else:
+                    logger.info("stage2.unit step=build %s", label)
+                    engine_id = (
+                        self.build_analysis_code(
+                            unit,
+                            explicit_engine=explicit_engine,
+                            progress_label=label,
+                        )
+                        or engine_id
+                    )
+
+                logger.info("stage2.unit step=run %s", label)
+                raw = self.run_analysis(unit)
+
+                logger.info("stage2.unit step=validate %s", label)
+                evidence_index = self._validate_analysis_coverage(raw, unit)
+                self._bind_output_provenance(raw, unit, evidence_index)
+            except (PreflightAnalysisError, CliEngineError, OSError) as exc:
+                message = f"{type(exc).__name__}: {exc}"
+                logger.warning("stage2.unit failed %s -> %s", label, message)
+                unit_failures.append((label, message))
+                # Never drop a configured input silently; record it as failed.
+                aggregated_key, entry = self._failed_unit_entry(label, unit, message)
+                if entry is not None:
+                    aggregated[aggregated_key].append(entry)
+                continue
+
+            for key in aggregated:
+                aggregated[key].extend(raw.get(key) or [])
+
+            # Only a fully validated unit may mark its generated code as current.
+            build_state[label] = {
+                "fingerprint": fingerprint,
+                "engine": engine_id,
+                "implementation_files": self._declared_implementation_files(raw),
+            }
+            self._save_build_state(build_state)
+            logger.info("stage2.unit ok %s", label)
+
+        if unit_failures and not aggregated["resources"] and not aggregated["capabilities"]:
+            detail = "；".join(f"{label}: {message}" for label, message in unit_failures)
+            raise PreflightAnalysisError(f"Stage 2 所有输入单元都失败：{detail}")
+
+        raw = aggregated
         resource_analysis = list(raw.get("resource_analysis") or [])
         function_analysis = list(raw.get("function_analysis") or [])
         self._write_analysis_file(

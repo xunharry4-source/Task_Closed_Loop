@@ -3,11 +3,12 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 from ..errors import CliEngineError
 
@@ -160,21 +161,113 @@ class CliEngineAdapter(ABC):
     def build_command(self, *, mode: str, prompt: str, cwd: Path) -> List[str]:
         raise NotImplementedError
 
-    def run(self, *, mode: str, prompt: str, cwd: Path, timeout_seconds: int = 900) -> CliRunResult:
+    def run(
+        self,
+        *,
+        mode: str,
+        prompt: str,
+        cwd: Path,
+        timeout_seconds: int | None = 900,
+        on_output: Callable[[str, str], None] | None = None,
+    ) -> CliRunResult:
+        """Run the CLI, optionally reporting output while it is still working.
+
+        `timeout_seconds=None` disables the limit. `on_output(stream, line)` is called
+        for each line as it arrives, so a long run is observable instead of silent
+        until exit.
+        """
+
         status = self.detect()
         if not status.ready:
             raise CliEngineError(f"{self.engine_id} is not ready: {status.state}: {status.detail or ''}".rstrip())
         command = self.build_command(mode=mode, prompt=prompt, cwd=Path(cwd))
-        proc = subprocess.run(
+
+        if on_output is None:
+            proc = subprocess.run(
+                command,
+                cwd=str(cwd),
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+                encoding="utf-8",
+                errors="replace",
+            )
+            return CliRunResult(self.engine_id, command, proc.returncode, proc.stdout, proc.stderr)
+
+        return self._run_streaming(
+            command=command,
+            cwd=Path(cwd),
+            timeout_seconds=timeout_seconds,
+            on_output=on_output,
+        )
+
+    def _run_streaming(
+        self,
+        *,
+        command: List[str],
+        cwd: Path,
+        timeout_seconds: int | None,
+        on_output: Callable[[str, str], None],
+    ) -> CliRunResult:
+        stdout_lines: List[str] = []
+        stderr_lines: List[str] = []
+
+        process = subprocess.Popen(
             command,
             cwd=str(cwd),
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout_seconds,
             encoding="utf-8",
             errors="replace",
+            bufsize=1,
         )
-        return CliRunResult(self.engine_id, command, proc.returncode, proc.stdout, proc.stderr)
+
+        def drain(stream, sink: List[str], name: str) -> None:
+            try:
+                for line in stream:
+                    sink.append(line)
+                    text = line.rstrip("\n")
+                    if text:
+                        try:
+                            on_output(name, text)
+                        except Exception:
+                            # Reporting must never break the run it reports on.
+                            pass
+            finally:
+                stream.close()
+
+        threads = [
+            threading.Thread(target=drain, args=(process.stdout, stdout_lines, "stdout"), daemon=True),
+            threading.Thread(target=drain, args=(process.stderr, stderr_lines, "stderr"), daemon=True),
+        ]
+        for thread in threads:
+            thread.start()
+
+        try:
+            returncode = process.wait(timeout=timeout_seconds)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+            for thread in threads:
+                thread.join(timeout=5)
+            raise subprocess.TimeoutExpired(
+                cmd=command,
+                timeout=timeout_seconds,
+                output="".join(stdout_lines),
+                stderr="".join(stderr_lines),
+            )
+
+        for thread in threads:
+            thread.join(timeout=10)
+
+        return CliRunResult(
+            self.engine_id,
+            command,
+            returncode,
+            "".join(stdout_lines),
+            "".join(stderr_lines),
+        )
 
     @staticmethod
     def parse_json_stdout(result: CliRunResult):

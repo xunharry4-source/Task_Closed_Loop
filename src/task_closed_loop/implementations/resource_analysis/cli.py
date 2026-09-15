@@ -61,8 +61,6 @@ class CliResourceCapabilityAnalyzer:
                     "allowed_cli_engines", ["codex_cli", "gemini_cli", "claude_cli"]
                 )
             ),
-            cli_timeout_seconds=int(cli_cfg.get("timeout_seconds") or 900),
-            analysis_timeout_seconds=int(section.get("analysis_timeout_seconds") or 600),
         )
         output = engine.materialize(
             inputs,

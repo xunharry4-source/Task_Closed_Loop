@@ -27,6 +27,10 @@ class CodexCliAdapter(CliEngineAdapter):
             "--skip-git-repo-check",
             "--sandbox",
             sandbox,
+            # Stage 2 analysis and capability builds run in an isolated staging
+            # directory; a broken or unrelated local execpolicy must not be able to
+            # stop the whole production chain.
+            "--ignore-rules",
             "--json",
             prompt,
         ]
