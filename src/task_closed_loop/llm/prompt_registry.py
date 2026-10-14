@@ -24,7 +24,19 @@ class PromptRegistry:
     def get(self, name: str) -> str:
         entry = self._manifest["prompts"][name]
         path = self._prompt_dir / entry["file"]
-        return path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8")
+        # Shared sections (e.g. the Stage 3-7 input/output contract) are appended from
+        # one file, so every role and every adapter sees exactly the same contract.
+        for include in entry.get("includes") or ():
+            included = self._manifest["prompts"][include]
+            if included.get("includes"):
+                raise ValueError(f"Prompt include {include} must not include other prompts.")
+            text = (
+                text.rstrip()
+                + "\n\n"
+                + (self._prompt_dir / included["file"]).read_text(encoding="utf-8")
+            )
+        return text
 
     def role(self, name: str) -> str:
         return str(self._manifest["prompts"][name]["role"])

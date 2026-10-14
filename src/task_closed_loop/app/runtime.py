@@ -14,7 +14,12 @@ from task_closed_loop.diagnostics.logging import (
     model_label,
     set_flow_id,
 )
-from task_closed_loop.implementations.composition import build_locked_production_pipeline
+from task_closed_loop.implementations.composition import (
+    build_locked_production_pipeline,
+    build_project_chain_run,
+    first_step_mode,
+)
+from task_closed_loop.implementations.task_persistence import save_project_tasks
 from task_closed_loop.llm import build_llm
 from task_closed_loop.reality.builder import RealityEngine
 from task_closed_loop.tasks.continuity import TaskContinuityEngine
@@ -40,10 +45,140 @@ def _task_payload(task) -> dict:
     }
 
 
+def _print_tasks(tasks) -> None:
+    print("New Tasks:")
+    if not tasks:
+        print("[]")
+        return
+    for index, task in enumerate(tasks, start=1):
+        metadata = task.metadata or {}
+        print()
+        header = f"Task {index}"
+        theme = str(metadata.get("theme") or "")
+        tier = str(metadata.get("task_tier") or "")
+        if theme or tier:
+            header += f"  [{theme}{' / ' if theme and tier else ''}{tier}]"
+        print(header)
+        if metadata.get("entity_id"):
+            print("所属项目：" + str(metadata["entity_id"]))
+        print("任务：" + task.description)
+        print("对用户的价值：" + task.user_value)
+        print("需要得到什么结果：" + task.expected_reality_result)
+        print("执行步骤：")
+        for step_index, step in enumerate(task.execution_steps, start=1):
+            print(f"{step_index}. {step}")
+
+
 async def _validate_reasoner(reasoner) -> None:
     validate = getattr(reasoner, "validate_connection", None)
     if validate is not None:
         await validate()
+
+
+async def _run_project_chain(*, config, root, logger, artifacts, flow_id, minimum_tasks, max_rounds) -> list:
+    """SKILL first step: one pipeline run per project, each with its own reality.
+
+    Stages 4-7 and the artifact writers are the unchanged implementations; only the
+    first step differs, and each project is isolated from every other.
+    """
+
+    chain = await build_project_chain_run(
+        config=config,
+        project_root=root,
+        minimum_tasks=minimum_tasks,
+        max_rounds=max_rounds,
+        logger=logger,
+    )
+    if not chain.items:
+        raise RuntimeError(
+            "没有任何数据源或功能归属到已声明的项目；"
+            "请在 config/preflight_sources.yml 的条目上填写 entities。"
+        )
+
+    assignment = chain.assignment
+    logger.info(
+        "runtime.projects week=%s projects=%s store=%s",
+        chain.week,
+        [item.project.project_id for item in chain.items],
+        getattr(chain.store, "path", None),
+    )
+    if assignment is not None:
+        artifacts.write_json(
+            "project_assignment.json",
+            {
+                "flow_id": flow_id,
+                "assignments": assignment.to_payload(),
+                "origin": dict(assignment.origin),
+                "unassigned_resources": list(assignment.unassigned()),
+            },
+        )
+        if assignment.unassigned():
+            logger.warning(
+                "runtime.projects 未归属的资源（不会产生任务）：%s",
+                list(assignment.unassigned()),
+            )
+
+    produced: list = []
+    try:
+        for item in chain.items:
+            project_id = item.project.project_id
+            logger.info("runtime.project start %s", project_id)
+            production = await item.pipeline.run()
+            tasks = list(production.tasks)
+            report = save_project_tasks(
+                store=chain.store,
+                project=item.project,
+                tasks=tasks,
+                logger=logger,
+            )
+            produced.extend(tasks)
+            artifacts.write_json(
+                f"project_{project_id}.json",
+                {
+                    "flow_id": flow_id,
+                    "project": asdict(item.project),
+                    "week": chain.week,
+                    "reality_id": production.reality.reality_id,
+                    "rounds": production.rounds,
+                    "stage_order": production.stage_order,
+                    "task_count": len(tasks),
+                    "artifacts_dir": str(item.artifacts_dir),
+                    "chain": _chain_payload(item.generator.chain_trace),
+                    "task_store": {
+                        "inserted": report.inserted,
+                        "repeated": report.repeated,
+                        "shelved": report.shelved,
+                        "skipped": report.skipped,
+                    },
+                    "tasks": [_task_payload(task) for task in tasks],
+                },
+            )
+            logger.info(
+                "runtime.project done %s tasks=%d rounds=%d",
+                project_id,
+                len(tasks),
+                production.rounds,
+            )
+    finally:
+        if chain.store is not None:
+            chain.store.close()
+
+    return produced
+
+
+def _chain_payload(chain_trace) -> dict:
+    return {
+        "reality_id": chain_trace.reality_id,
+        "problems": [asdict(record) for record in chain_trace.problems],
+        "value_opportunities": [asdict(record) for record in chain_trace.values],
+        "capability_voids": [asdict(record) for record in chain_trace.demands],
+        "theme_plan": asdict(chain_trace.theme_plan) if chain_trace.theme_plan else None,
+        "themes_asked": list(chain_trace.themes_asked),
+        "candidate_counts": dict(chain_trace.candidate_counts),
+        "dropped_records": dict(chain_trace.dropped_records),
+        "dropped_candidates": dict(chain_trace.dropped_candidates),
+        "errors": dict(chain_trace.errors),
+    }
 
 
 async def _run(*, use_test_resources: bool) -> None:
@@ -72,6 +207,25 @@ async def _run(*, use_test_resources: bool) -> None:
         )
 
         production = None
+        if not use_test_resources and first_step_mode(config) == "skill_chain":
+            if not bool(pipeline_cfg.get("enabled", True)):
+                raise RuntimeError("正式生产模式必须启用锁定的 7-Stage Production Pipeline。")
+            produced_tasks = await _run_project_chain(
+                config=config,
+                root=root,
+                logger=logger,
+                artifacts=artifacts,
+                flow_id=flow_id,
+                minimum_tasks=min_qualified_tasks,
+                max_rounds=int(pipeline_cfg.get("max_rounds", 3)),
+            )
+            artifacts.write_json(
+                "task_list.json",
+                {"flow_id": flow_id, "tasks": [_task_payload(t) for t in produced_tasks]},
+            )
+            _print_tasks(produced_tasks)
+            return
+
         if not use_test_resources:
             if not bool(pipeline_cfg.get("enabled", True)):
                 raise RuntimeError("正式生产模式必须启用锁定的 7-Stage Production Pipeline。")
@@ -233,19 +387,7 @@ async def _run(*, use_test_resources: bool) -> None:
         })
 
         print("Current Reality:", result.reality.current_facts)
-        print("New Tasks:")
-        if not produced_tasks:
-            print("[]")
-        else:
-            for index, task in enumerate(produced_tasks, start=1):
-                print()
-                print(f"Task {index}")
-                print("任务：" + task.description)
-                print("对用户的价值：" + task.user_value)
-                print("需要得到什么结果：" + task.expected_reality_result)
-                print("执行步骤：")
-                for step_index, step in enumerate(task.execution_steps, start=1):
-                    print(f"{step_index}. {step}")
+        _print_tasks(produced_tasks)
 
     except Exception as exc:
         artifacts.write_json("run_failure.json", {

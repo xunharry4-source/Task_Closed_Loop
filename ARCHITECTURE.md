@@ -55,8 +55,10 @@ Stage 2 | Resource + Function Analysis
   -> resources.generated.yml
   -> capabilities.generated.yml
        ↓
-Stage 3 | Initial Task Generation
-  Resource + Capability -> unreviewed candidates
+Stage 3 | Initial Task Generation（第一步，见 §7.1）
+  本项目资源 + 全局功能
+    -> 问题 / 价值 / 需求 / 主题（四路独立）
+    -> 每个主题各一次 -> 未审查候选（必须带来源记录）
        ↓
 Stage 4 | Independent Task Audit
        ↓
@@ -72,6 +74,10 @@ Stage 7 | Regenerate Tasks using Dimensions
 ```
 
 任何 Stage 7 Candidate 必须重新经过 Stage 4。
+
+配置了多个项目时，**每个项目各跑一次完整的 Stage 1–7**（每个项目需要自己的 Reality，
+而候选被硬绑定在单一 `reality_id` 上）。Stage 1 幂等复用，Stage 2 的真实扫描全程只执行一次
+并按项目切分；产物写在 `generated/<project_id>/`（只有一个项目时仍写 `generated/`）。
 
 ## 4. Stage 1：Project Check / Repair
 
@@ -229,6 +235,79 @@ V1.3 同样保留既有 Task 闭环契约：
 - 多 Parent / 多 Outcome / 多代 Task Proliferation；
 - 大 Outcome `discovery_payload` / bounded discovery context。
 
+## 7.1 Stage 3 第一步：项目 → 问题/价值/需求 → 任务
+
+生成任务的第一步按参谋 SKILL 的链条执行（`task_generation.first_step.mode: skill_chain`，默认）。
+Stage 4 审查、Stage 5 数量检查、Stage 6 维度生成与全部产物保存**完全不变**；Stage 7 的顺序、
+回边与 Contract 也不变，只是改为在同一条链上补充生成。Pipeline 与 Contract 本身没有改——
+新链条只是 `InitialTaskGenerator` / `TaskRegenerator` 的另一种实现。
+
+```text
+资源(按项目) + 功能(全局)
+        ↓
+   项目(实体)  ← 唯一隔离边界
+        ├── 问题发现     UNKNOWN_BLINDSPOT / KNOWN_DEFECT
+        ├── 价值发现     NOVEL_PARADIGM / INCREMENTAL_SCHEME
+        ├── 需求发现     BREAKTHROUGH_NEED / BASELINE_NEED
+        └── 主题规划     5 固定 + 2–5 推导
+                ↓
+        每个主题各一次调用 → 任务（必须挂在上面某条记录上）
+```
+
+**隔离边界只有资源。** 资源按项目划分，功能不分项目：所有项目都可以使用全部已配置的功能。
+因此 `entities` 归属只写在 `local_resources` / `remote_resources` 上，功能条目不需要。
+
+- **项目层**：`config/projects.yml` 声明项目（id 与任务库 `entities.entity_id` 一致）。
+  **归属由系统自己判断**：Stage 1/2 跑完后，用项目说明对照每份资源的简介判断它属于谁
+  （`projects/assignment.py`，一次调用），一份资源可同时属于多个项目。结果按
+  「项目 + 资源」指纹缓存在 `cli_project/state/project_assignment.yml`，没变就不再问。
+  配置里的 `entities` 变成可选覆盖：写了就钉住，并且不会再去问模型。
+  归属不进 Stage 2 payload，因此不影响 Stage 2 指纹与已生成的扫描代码。
+- **项目隔离**：`projects/grouping.py` 从 Stage 2 标准输出的 `metadata.source_input_ids`
+  还原资源归属再切分（`ResourceSnapshot` 没有 metadata 字段，归属在 Stage 2→3 边界会丢，
+  所以从标准文件读回）。候选与任务被硬绑定在单一 `reality_id` 上，所以**每个项目各跑一次
+  完整流水线**；Stage 2 由 `ProjectStage2Cache` 共享，真实扫描全程只执行一次。
+- **四路独立发现**：问题、价值、需求、主题各一次调用，输入都只是
+  `project` + 本项目资源 + 现实 + 全局功能，**互不读对方的结论**——否则一层的盲区会变成
+  下一层的起点。只有"按主题生成任务"那一步会同时看到三个中间层，因为任务要从里面挑来源。
+- **主题**：5 个固定主题（优化/推进/收益/探针/破局）由 Host 给定，探针与破局不可省略
+  （模型要求跳过时记录并照常提问）；推导主题 2–5 个，按上周 `yield_count` 轮换。
+  每个主题一次独立调用，互不污染上下文。
+- **任务只有三个基准**：资源、功能、主题。提示词里不再附加别的限制——
+  可行性、价值大小、是否"合理"都不在生成期判断。用户的"不考虑"清单（`exclusions`）
+  由 Host 在生成之后过滤，不写进提示词。
+- **生成任务时带项目说明**：该步输入的 `project` 含项目 id、名称、说明，以及
+  `data_source_slices`（这个项目在各数据源里只用哪一部分），任务必须是这个项目的工作。
+- **功能只给名称**：第一步的输入里功能就是一串名称（`codex_cli`、`gmail`…），
+  不给简介、不给操作清单、不给 `target_scope` / `input_schema`。模型对这些工具本来就有
+  完整认知，必要时还会自己去查；把 Stage 2 探到的操作清单塞进去，只会让它以为这个功能
+  就只有那几个操作。任务写 `needed_functions`（功能名称），Host 再映射回 Stage 2 实际
+  报告的 capability id 交给 Stage 4，因此审查侧的能力判断照旧。
+- **资源只给简介**：第一步看到的是「`resource_id` + 你在配置里写的那句话 + 本项目的切分说明」。
+  Stage 2 的完整分析（141 KB 级）只进两处：一次是**现实构建**（每项目一次调用，
+  `facts` 写成"现在有什么、到什么程度"的简要清单），一次是 **Stage 4 审查**。
+  四路发现与按主题生成都只看简介 + 这份现实，因此引用资源时写 `resource:<id>`，
+  要指具体内容就引 `reality:current#...`。
+- **血缘**：候选必须带 `source_kind` + `source_ref_id` 指向本项目本轮的真实中间层记录；
+  没有来源的候选由 Host 丢弃并记录原因。层级与类型（TIER_1/TIER_2、UNKNOWN_PROBE /
+  NEW_PARADIGM / FIX_AUDIT / CREATIVE_PROGRESS / DECISION_ANALYSIS /
+  MECHANISM_ITERATION）由 Host 判定，不由模型填。
+- **不按可行性预筛**：缺能力的任务照常提出，缺口写成需求；是否成立仍由 Stage 4 独立判断。
+- **第一遍要多、要全**：四路发现与按主题生成都以数量和覆盖面为目标，不做自我筛选——
+  "可能不合理 / 没意义 / 价值不大" 不是放弃的理由，筛选是 Stage 4 的职责。
+  唯一不放松的是**不得编造**：每条记录与任务都必须有真实存在的依据引用。
+- **Stage 7 也走主题链条**：Stage 6 的每个思考角度被当成一个推导主题，由
+  `ProjectChainTaskRegenerator` 重新问一次（同一角度只问一次），来源仍限定在 Stage 3
+  已确认的问题/价值/需求。否则补充轮的候选没有来源记录，任务库必须拒收。
+- **持久化**：`config/task_store.yml` 指定任务库（默认参谋 SQLite 库）。项目、问题、价值、
+  需求、主题在第一步写入；任务在整条流水线跑完后写入，并回写来源 `status='已转任务'`。
+  `task_key = sha256(entity_id, task_type, core_target)`：同 key 的未结任务只
+  `times_proposed+1`，被搁置且未到期的跳过，命中 `exclusions` 的候选在生成期即丢弃。
+  **对已存在的任务库只写数据，绝不改结构**；缺表直接报错并指出表名。
+
+旧链条（发现 → 任务想法 → 候选任务，单一全局 reality）保留在
+`implementations/task_generation/llm.py`，用 `first_step.mode: legacy_discovery` 切回。
+
 ## 8. Stage 3：不重复 Stage 2 感知工作
 
 旧 TaskGenerationEngine 支持 Observation Acquisition，这是 Task-only/lifecycle 模式的重要能力。
@@ -250,6 +329,8 @@ Task-only / Outcome lifecycle 仍可保留原 Observation Acquisition 语义。
 - Stage 5：只统计审核通过的业务 Task。
 - Stage 6：只有 Task 过少才产生 Dimensions。
 - Stage 7：依据 Dimensions 补充生成；全部回 Stage 4。
+  `skill_chain` 模式下，每个 Dimension 作为一个推导主题重新提问（同一角度只问一次），
+  补充出来的任务与第一轮一样带项目与来源血缘。
 
 旧 `Coverage Expansion` 不允许在 Stage 3 偷跑 Dimensions。
 
@@ -268,6 +349,20 @@ Task-only / Outcome lifecycle 仍可保留原 Observation Acquisition 语义。
 由于缺少等价的稳定 `auth status`，使用最小 headless、plan/sandbox 请求验证凭据是否真正能服务请求。
 
 Task Closed Loop 不负责安装 CLI、登录账户或修改全局认证。
+
+## 10.1 模型调用留痕
+
+每次模型调用的**完整提示词**与**原始回复**都会落盘：
+
+```text
+log/<YYYY-MM>/<flow_id>/prompts/<时间戳>_<role>_<sha12>_<req>.json      提示词
+log/<YYYY-MM>/<flow_id>/prompts/<时间戳>_<role>_response_<sha12>.json   回复
+```
+
+提示词在调用**之前**写入：挂死、被杀、CLI 自身报错的那一次，恰恰是最需要看提示词的。
+全部 7 个适配器都记录（Gemini 家族在 `_create_interaction`，Ollama 家族在 `_chat_json`）。
+提示词内嵌 Resource 内容，因此只落本地——`log/` 已在 `.gitignore` 中。
+用 `PROMPT_CACHE_ENABLED=false` 关闭。
 
 ## 11. Secret Contract
 

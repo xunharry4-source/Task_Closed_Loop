@@ -77,6 +77,15 @@ class GemmaLLM(GeminiLLM):
             + "只返回满足 JSON Schema 的 JSON。"
         )
 
+        if self.prompt_cache is not None:
+            self.prompt_cache.record(
+                provider="gemma",
+                model=self.model,
+                role_key=role_key,
+                prompt=input_text,
+                metadata={"transport": "genai_generate_content"},
+            )
+
         config: dict[str, Any] = {
             "response_mime_type": "application/json",
             "response_json_schema": schema,

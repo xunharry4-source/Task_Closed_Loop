@@ -39,6 +39,12 @@ class PromptRequestCache:
         prompt: str,
         metadata: dict[str, Any] | None = None,
     ) -> Path | None:
+        """Write the exact prompt right before the call.
+
+        Before, not after: a call that hangs, is killed, or dies in the CLI is exactly
+        the one whose prompt you need.
+        """
+
         if not self.enabled:
             return None
 
@@ -99,6 +105,58 @@ class PromptRequestCache:
             prompt_hash[:16],
             path,
         )
+        return path
+
+
+    def record_response(
+        self,
+        *,
+        provider: str,
+        model: str,
+        role_key: str,
+        response: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> Path | None:
+        """Write what the model actually answered, next to the prompts."""
+
+        if not self.enabled:
+            return None
+
+        response_text = str(response)
+        response_hash = hashlib.sha256(response_text.encode("utf-8")).hexdigest()
+        record = {
+            "flow_id": self.flow_id,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "provider": str(provider),
+            "model": str(model),
+            "role_key": str(role_key),
+            "response_sha256": response_hash,
+            "response": response_text,
+            "metadata": dict(metadata or {}),
+        }
+        filename = "_".join(
+            (
+                datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S.%fZ"),
+                _SAFE_NAME.sub("_", str(role_key)),
+                "response",
+                response_hash[:12],
+            )
+        ) + ".json"
+        path = self.directory / filename
+        try:
+            self.directory.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(record, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            runtime_logger().warning(
+                "llm.prompt_cache.response_write_failed role=%s model=%s error=%s",
+                role_key,
+                model,
+                exc,
+            )
+            return None
         return path
 
 

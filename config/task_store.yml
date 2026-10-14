@@ -1,0 +1,11 @@
+# 任务库：项目、问题、价值、需求、主题与任务的持久化位置。
+#
+# 这是整条链条唯一的长期记忆。没有它，每次运行都从零开始，
+# "同一个任务不要重复提出" 这类规则根本无从判断。
+#
+# path 指向一个已经存在的任务库时，本程序只写数据，绝不修改它的表结构；
+# 缺表会直接报错并指出表名。指向新路径时才会按自带结构建库。
+task_store:
+  enabled: ${TASK_STORE_ENABLED:true}
+  path: ${TASK_STORE_PATH:/Users/harry/Documents/task/参谋/参谋.db}
+  create_if_missing: ${TASK_STORE_CREATE_IF_MISSING:true}

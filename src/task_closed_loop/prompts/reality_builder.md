@@ -1,28 +1,23 @@
-# Reality Builder V1
+# 当前现实
 
-你负责把本轮可观察事实整理成 Current Reality。
+把本轮可观察到的事实整理成当前现实。输入：`resources`（完整的资源分析结果）、`evidence`、
+`external_effects`、`execution_deltas`、`related_history`。
 
-输入来自：
-- Current Resources
-- Current Evidence
-- External Effects
-- Current Execution Deltas
-- 与当前现实直接相关的 Reality History
+`facts` 要回答一句话：**现在有什么、到什么程度了。**
 
-输出 Current Reality：
+- 有哪些数据/内容/成果，各自是关于什么的（例如：有哪些股票的什么数据；小说写到第几卷第几章，写的是什么）
+- 覆盖范围：时间区间、数量级、最新到什么时候
+- 当前进度与状态
 
-- reality_id
-- current_facts
-- current_gaps
-- current_conflicts
-- evidence_refs
-- effect_refs
-- related_history_refs
-- identity_relations
+写成简要清单，**不要堆明细**——不逐个列字段、文件、样例值。后续步骤只看这份现实和资源简介，
+所以这里要让没见过原始数据的人读完就知道现在是什么情况。
 
-现实中已经确认的事实直接保留。
-信息缺口作为当前现实的一部分保留。
-互相冲突的当前 Evidence 作为 Current Conflict 保留。
-History 提供连续性背景，并保持与 Current Facts 的时间位置差异。
+其余字段：
 
-Existing Tasks 在 Current Reality 完成后由 Task Continuity 单独读取，因此本阶段只根据现实输入建立 Reality。
+- `gaps`：当前缺什么、哪里不清楚
+- `conflicts`：互相矛盾的证据
+- `evidence_refs` / `effect_refs`：稳定、可识别的对象引用（后续步骤会原样照抄引用它们）
+- `related_history_refs`、`object_relations`：与当前现实相关的历史与对象关系
+- `reality_id`：本轮现实的 id
+
+已有任务由后续步骤单独判断，这里只根据现实输入建立当前现实。

@@ -4,134 +4,49 @@ from task_closed_loop.integration.models import (
     CapabilityDescriptor,
     ResourceSnapshot,
 )
-from task_closed_loop.integration.capability_semantics import (
-    observable_capability_refs,
-)
 from task_closed_loop.reality.models import RealitySnapshot
 from task_closed_loop.tasks.generation_models import StructuralFinding
 from task_closed_loop.tasks.models import Task, TaskCandidate
-
-
-def materialized_reality_refs(
-    reality: RealitySnapshot,
-    resources: list[ResourceSnapshot] | None = None,
-) -> set[str]:
-    """Return refs that already represent observed/materialized reality."""
-
-    refs = (
-        set(reality.current_facts)
-        | set(reality.evidence_refs)
-        | set(reality.effect_refs)
-    )
-
-    for resource in resources or []:
-        refs.add(str(resource.resource_id))
-        refs.add(str(resource.source_identity))
-
-        # A task_outcome resource carries what an observation actually returned.
-        # The concrete objects it reports (gmail:message:..., db:row:..., and the
-        # evidence backing them) are observed reality, so a descendant Task that
-        # grounds itself in them is *more* specific than one citing only the
-        # outcome id. Without this the audit rejects exactly the well-grounded
-        # children that Task Proliferation is supposed to produce.
-        if str(resource.resource_type).strip() == "task_outcome" and isinstance(
-            resource.payload, dict
-        ):
-            for key in ("subject_refs", "evidence_refs", "effect_refs"):
-                for value in resource.payload.get(key) or ():
-                    text = str(value).strip()
-                    if text:
-                        refs.add(text)
-
-    reality_id = str(reality.reality_id).strip()
-    if reality_id:
-        refs.add(reality_id)
-
-    return refs
-
-
-_REF_QUALIFIERS = (
-    "resource:",
-    "reality:",
-    "fact:",
-    "evidence:",
-    "effect:",
+from task_closed_loop.tasks.references import (
+    CAPABILITY,
+    TASK_OUTCOME,
+    ReferenceContext,
+    format_problems,
+    parse_reference,
+    reference_key,
+    reference_without_path,
 )
 
-_REF_PATH_BOUNDARIES = (".", "[", "/", "#")
 
-
-def unresolved_reality_refs(
-    refs,
-    available_refs: set[str],
-) -> set[str]:
-    """Return the refs that cannot be grounded in currently available reality.
-
-    A model often cites reality more precisely than a bare identifier — for example
-    `resource:orders_rows.payload.rows[3]` or `reality:<id>.current_gaps[2]`. Those
-    are *more* grounded than the bare id, so an exact-match-only check would throw
-    away a valid discovery. A ref therefore resolves when it names a known identity,
-    optionally behind a `resource:`/`reality:` qualifier and followed by a sub-path.
-
-    Refs that name something not present in reality are still unresolved: that is the
-    hallucination guard and it must keep failing.
-    """
-
-    unresolved: set[str] = set()
-    for raw in refs:
-        text = str(raw).strip()
-        if not text:
-            continue
-        if text in available_refs:
-            continue
-
-        body = text
-        lowered = text.lower()
-        for qualifier in _REF_QUALIFIERS:
-            if lowered.startswith(qualifier):
-                body = text[len(qualifier):]
-                break
-
-        if body in available_refs:
-            continue
-
-        # A known identity may itself contain dots or colons, so match on the longest
-        # identity that the ref starts with, at a real path boundary.
-        if any(
-            body.startswith(known)
-            and body[len(known) : len(known) + 1] in _REF_PATH_BOUNDARIES
-            for known in available_refs
-            if known
-        ):
-            continue
-
-        unresolved.add(text)
-    return unresolved
-
-
-def current_reality_refs(
+def reference_context(
     reality: RealitySnapshot,
     resources: list[ResourceSnapshot] | None = None,
     capabilities: list[CapabilityDescriptor] | None = None,
-) -> set[str]:
-    """Return valid grounding refs for Task validation.
+    *,
+    allow_capability: bool,
+) -> ReferenceContext:
+    """The single place that decides what a Stage 3-7 citation may point at.
 
-    Materialized refs represent facts already observed. Observable Capability refs are
-    also accepted, but only as *sensor/probe basis*. CandidateStructuralAudit prevents
-    ordinary business Tasks from treating a capability-only basis as if it were an
+    `allow_capability=False` is the discovery layer: only reality that has already been
+    observed/materialized counts. Candidate and final Task audits also accept an
+    observable Capability, but only as sensor/probe basis; CandidateStructuralAudit
+    prevents ordinary business Tasks from treating capability-only basis as an
     already observed business fact.
     """
 
-    refs = materialized_reality_refs(reality, resources)
-    refs |= observable_capability_refs(
-        capabilities or []
+    return ReferenceContext.build(
+        reality=reality,
+        resources=resources or [],
+        capabilities=capabilities or [],
+        allow_capability=allow_capability,
     )
-    return refs
 
 
 def candidate_identity_anchors(candidate: TaskCandidate) -> tuple[str, ...]:
-    anchors = candidate.identity_anchor_refs or candidate.reality_basis_refs
-    return tuple(sorted(str(x) for x in anchors))
+    if candidate.identity_anchor_refs:
+        return tuple(sorted(str(x) for x in candidate.identity_anchor_refs))
+    # Basis refs may point into a field of an object; identity is the object itself.
+    return tuple(sorted({reference_without_path(x) for x in candidate.reality_basis_refs}))
 
 
 class CandidateStructuralAudit:
@@ -156,22 +71,53 @@ class CandidateStructuralAudit:
                 )
             )
 
-        available_refs = current_reality_refs(
+        references = reference_context(
             reality,
             resources,
             capabilities,
+            allow_capability=True,
         )
-        basis_refs = set(candidate.reality_basis_refs)
-        missing_basis = unresolved_reality_refs(basis_refs, available_refs)
+        basis_refs = {str(ref).strip() for ref in candidate.reality_basis_refs}
+        missing_basis = references.problems(basis_refs)
         if missing_basis:
             findings.append(
                 StructuralFinding(
                     code="missing_current_reality_basis",
                     candidate_id=candidate.candidate_id,
-                    message="Candidate 引用了当前 Resources / Reality 中不存在的现实依据。",
+                    message=(
+                        "based_on_refs 中有无法在当前输入里找到的引用："
+                        + format_problems(missing_basis)
+                    ),
                     evidence=tuple(sorted(missing_basis)),
                 )
             )
+        elif not basis_refs:
+            findings.append(
+                StructuralFinding(
+                    code="missing_current_reality_basis",
+                    candidate_id=candidate.candidate_id,
+                    message="Candidate 没有给出任何 based_on_refs。",
+                )
+            )
+
+        if candidate.origin_type != "observation_acquisition":
+            anchor_problems = {
+                str(ref).strip(): reason
+                for ref in candidate.identity_anchor_refs
+                if (reason := references.check_anchor(ref)) is not None
+            }
+            if anchor_problems:
+                findings.append(
+                    StructuralFinding(
+                        code="invalid_identity_anchor",
+                        candidate_id=candidate.candidate_id,
+                        message=(
+                            "about_object_refs 中有不合规的对象引用："
+                            + format_problems(anchor_problems)
+                        ),
+                        evidence=tuple(sorted(anchor_problems)),
+                    )
+                )
 
         # A readable/searchable capability proves only that the system can acquire
         # reality. It cannot by itself prove that a sender/file/record/event/problem
@@ -180,7 +126,7 @@ class CandidateStructuralAudit:
         capability_basis = {
             ref
             for ref in basis_refs
-            if str(ref).startswith("capability:")
+            if parse_reference(ref).kind == CAPABILITY
         }
         materialized_basis = basis_refs - capability_basis
         if (
@@ -201,20 +147,27 @@ class CandidateStructuralAudit:
             )
 
         if candidate.origin_type == "task_proliferation":
-            expected_outcome_refs = {
-                f"task_outcome:{outcome_id}"
+            expected_outcome_keys = {
+                (TASK_OUTCOME, str(outcome_id).strip())
                 for outcome_id in candidate.parent_outcome_ids
                 if str(outcome_id).strip()
             }
-            missing_outcome_basis = expected_outcome_refs - basis_refs
+            cited_keys = {reference_key(ref) for ref in basis_refs}
+            missing_outcome_basis = {
+                f"{kind}:{identity}"
+                for kind, identity in expected_outcome_keys - cited_keys
+            }
+            expected_outcome_refs = {
+                f"{kind}:{identity}" for kind, identity in expected_outcome_keys
+            }
             if not expected_outcome_refs or missing_outcome_basis:
                 findings.append(
                     StructuralFinding(
                         code="proliferation_missing_parent_outcome_basis",
                         candidate_id=candidate.candidate_id,
                         message=(
-                            "Task 自增殖候选必须直接引用其 parent Outcome 的 "
-                            "task_outcome:<outcome_id> 现实依据。"
+                            "Task 自增殖候选的 based_on_refs 必须包含每个来源 Outcome 的 "
+                            "task_outcome:<outcome_id>（可带 #字段路径）。"
                         ),
                         evidence=tuple(sorted(missing_outcome_basis or expected_outcome_refs)),
                     )

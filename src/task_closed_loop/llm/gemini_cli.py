@@ -269,6 +269,15 @@ class GeminiCliLLM(GeminiLLM):
                 schema=schema,
                 correction=correction,
             )
+            if self.prompt_cache is not None:
+                self.prompt_cache.record(
+                    provider="gemini_cli",
+                    model=self.cli_model or "(cli default)",
+                    role_key=role_key,
+                    prompt=prompt,
+                    metadata={"transport": "gemini_cli", "attempt": attempt + 1},
+                )
+
             self.debugger.request(
                 adapter="gemini_cli",
                 model=self.cli_model or "(cli default)",

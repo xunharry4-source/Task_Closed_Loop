@@ -45,6 +45,12 @@ llm:
     api_key: ${LMSTUDIO_API_KEY}
   roles:
     reality_builder: reality_builder
+    project_assignment: project_assignment
+    problem_discovery: problem_discovery
+    value_discovery: value_discovery
+    demand_discovery: demand_discovery
+    theme_planner: theme_planner
+    theme_task_generation: theme_task_generation
     existing_task_continuity: existing_task_continuity
     task_discovery: task_discovery
     task_candidate_audit: task_candidate_destructive_audit

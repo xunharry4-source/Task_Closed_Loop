@@ -8,6 +8,11 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from task_closed_loop.llm.debug import LLMDebugPrinter
+from task_closed_loop.model_io import (
+    from_model_output_schema,
+    to_model_input,
+    to_model_schema,
+)
 from task_closed_loop.llm.prompt_cache import PromptRequestCache
 from task_closed_loop.llm.gemini import (
     GeminiLLM,
@@ -271,6 +276,9 @@ class LMStudioLLM(GeminiLLM):
         input_payload: dict[str, Any],
         schema: dict[str, Any],
     ) -> dict[str, Any]:
+        # The model works with readable names; domain parsing keeps internal ones.
+        input_payload = to_model_input(input_payload)
+        schema = to_model_schema(schema)
         prompt = self._role_prompt(
             role_key
         )
@@ -422,6 +430,14 @@ class LMStudioLLM(GeminiLLM):
                 "不是可解析的 JSON。"
             ) from exc
 
+        if self.prompt_cache is not None:
+            self.prompt_cache.record_response(
+                provider="lmstudio",
+                model=self.model,
+                role_key=role_key,
+                response=content,
+            )
+
         if not isinstance(
             parsed,
             dict,
@@ -431,4 +447,4 @@ class LMStudioLLM(GeminiLLM):
                 "根节点必须是 object。"
             )
 
-        return parsed
+        return from_model_output_schema(parsed, schema)

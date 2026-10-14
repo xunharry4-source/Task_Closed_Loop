@@ -2,33 +2,69 @@ prompts:
   reality_builder:
     file: reality_builder.md
     role: build_current_reality
+    includes: [stage_io_contract]
   existing_task_continuity:
     file: existing_task_continuity.md
     role: reconcile_existing_tasks
+    includes: [stage_io_contract]
   need_opportunity_discovery:
     file: need_opportunity_discovery.md
     role: discover_needs_and_opportunities
+    includes: [stage_io_contract]
   preflight_source_analysis:
     file: preflight_source_analysis.md
     role: materialize_resources_and_capabilities
+  project_assignment:
+    file: project_assignment.md
+    role: assign_resources_to_projects
+    includes: [stage_io_contract]
+  problem_discovery:
+    file: problem_discovery.md
+    role: discover_project_problems
+    includes: [stage_io_contract]
+  value_discovery:
+    file: value_discovery.md
+    role: discover_project_values
+    includes: [stage_io_contract]
+  demand_discovery:
+    file: demand_discovery.md
+    role: discover_project_demands
+    includes: [stage_io_contract]
+  theme_planner:
+    file: theme_planner.md
+    role: plan_project_themes
+    includes: [stage_io_contract]
+  theme_task_generation:
+    file: theme_task_generation.md
+    role: generate_theme_tasks
+    includes: [stage_io_contract]
   task_discovery:
     file: task_discovery.md
     role: discover_task_candidates
+    includes: [stage_io_contract]
   task_proliferation:
     file: task_proliferation.md
     role: discover_task_descendants
+    includes: [stage_io_contract]
   task_coverage_expansion:
     file: task_coverage_expansion.md
     role: expand_thinking_dimensions
+    includes: [stage_io_contract]
   task_candidate_destructive_audit:
     file: task_candidate_destructive_audit.md
     role: review_single_candidate
+    includes: [stage_io_contract]
   task_candidate_set_audit:
     file: task_candidate_set_audit.md
     role: review_candidate_set
+    includes: [stage_io_contract]
   task_reality_validity:
     file: task_reality_validity.md
     role: review_final_task_reality_validity
+    includes: [stage_io_contract]
+  stage_io_contract:
+    file: stage_io_contract.md
+    role: stage_3_7_input_output_contract
   runtime_context:
     file: runtime_prompt.md
     role: closed_loop_runtime_context

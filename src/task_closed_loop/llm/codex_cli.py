@@ -295,13 +295,26 @@ class CodexCliLLM(GeminiLLM):
         native_schema = schema if is_strict_schema(schema) else None
         prompt_schema = None if native_schema is not None else schema
 
-        for _ in range(self.max_retries + 1):
+        for attempt in range(self.max_retries + 1):
             prompt = self._render_prompt(
                 role_key=role_key,
                 input_payload=input_payload,
                 schema=prompt_schema,
                 correction=correction,
             )
+            if self.prompt_cache is not None:
+                self.prompt_cache.record(
+                    provider="codex_cli",
+                    model=self.cli_model or "(codex default)",
+                    role_key=role_key,
+                    prompt=prompt,
+                    metadata={
+                        "transport": "codex_exec",
+                        "attempt": attempt + 1,
+                        "native_output_schema": native_schema is not None,
+                    },
+                )
+
             self.debugger.request(
                 adapter="codex_cli",
                 model=self.cli_model or "(codex default)",

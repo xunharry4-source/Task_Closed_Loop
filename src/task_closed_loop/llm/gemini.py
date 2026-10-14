@@ -10,7 +10,13 @@ from pathlib import Path
 from typing import Any
 
 from task_closed_loop.llm.debug import LLMDebugPrinter
+from task_closed_loop.model_io import (
+    from_model_output_schema,
+    to_model_input,
+    to_model_schema,
+)
 from task_closed_loop.llm.prompt_registry import PromptRegistry
+from task_closed_loop.llm import skill_chain_io
 from task_closed_loop.llm.prompt_cache import PromptRequestCache
 from task_closed_loop.reality.models import RealitySnapshot
 from task_closed_loop.tasks.generation_models import (
@@ -200,6 +206,18 @@ class GeminiLLM:
             }
         ]
 
+        if self.prompt_cache is not None:
+            self.prompt_cache.record(
+                provider="gemini",
+                model=self.model,
+                role_key=role_key,
+                prompt=input_text,
+                metadata={
+                    "transport": "genai_interactions_create",
+                    "endpoint": "interactions.create",
+                },
+            )
+
         self.debugger.request(
             adapter="gemini",
             model=self.model,
@@ -226,6 +244,9 @@ class GeminiLLM:
         input_payload: dict[str, Any],
         schema: dict[str, Any],
     ) -> dict[str, Any]:
+        # The model works with readable names; domain parsing below keeps internal ones.
+        input_payload = to_model_input(input_payload)
+        schema = to_model_schema(schema)
         interaction = await asyncio.to_thread(
             self._create_interaction,
             role_key=role_key,
@@ -243,6 +264,14 @@ class GeminiLLM:
                 "Gemini Interaction 缺少 output_text。"
             )
 
+        if self.prompt_cache is not None:
+            self.prompt_cache.record_response(
+                provider=getattr(self, "provider_name", "gemini"),
+                model=self.model,
+                role_key=role_key,
+                response=output_text,
+            )
+
         try:
             parsed = json.loads(
                 output_text.strip()
@@ -257,7 +286,7 @@ class GeminiLLM:
                 "Gemini JSON 根节点必须是 object。"
             )
 
-        return parsed
+        return from_model_output_schema(parsed, schema)
 
     async def build_reality(
         self,
@@ -1300,3 +1329,124 @@ class GeminiLLM:
                 parsed.get("reason") or ""
             ),
         )
+
+    # ---- first-step chain: project -> problem / value / demand -> task ----
+
+    async def assign_resources_to_projects(self, projects, resources, reality):
+        parsed = await self._interaction_json(
+            role_key="project_assignment",
+            input_payload={
+                "projects": projects,
+                "current_resources": resources,
+                "current_reality": reality,
+            },
+            schema=skill_chain_io.ASSIGNMENT_SCHEMA,
+        )
+        return skill_chain_io.assignments_from_payload(parsed)
+
+    async def discover_project_problems(
+        self, project, resources, reality, capabilities, existing_tasks
+    ):
+        parsed = await self._interaction_json(
+            role_key="problem_discovery",
+            input_payload={
+                "project": project,
+                "current_resources": resources,
+                "current_reality": reality,
+                "current_capabilities": capabilities,
+                "effective_existing_tasks": existing_tasks,
+            },
+            schema=skill_chain_io.PROBLEMS_SCHEMA,
+        )
+        return skill_chain_io.problems_from_payload(parsed)
+
+    async def discover_project_values(
+        self, project, resources, reality, capabilities, existing_tasks
+    ):
+        parsed = await self._interaction_json(
+            role_key="value_discovery",
+            input_payload={
+                "project": project,
+                "current_resources": resources,
+                "current_reality": reality,
+                "current_capabilities": capabilities,
+                "effective_existing_tasks": existing_tasks,
+            },
+            schema=skill_chain_io.VALUES_SCHEMA,
+        )
+        return skill_chain_io.values_from_payload(parsed)
+
+    async def discover_project_demands(
+        self, project, resources, reality, capabilities
+    ):
+        parsed = await self._interaction_json(
+            role_key="demand_discovery",
+            input_payload={
+                "project": project,
+                "current_resources": resources,
+                "current_reality": reality,
+                "current_capabilities": capabilities,
+            },
+            schema=skill_chain_io.DEMANDS_SCHEMA,
+        )
+        return skill_chain_io.demands_from_payload(parsed)
+
+    async def plan_project_themes(
+        self,
+        project,
+        resources,
+        reality,
+        capabilities,
+        fixed_themes,
+        previous_theme_yield,
+    ):
+        parsed = await self._interaction_json(
+            role_key="theme_planner",
+            input_payload={
+                "project": project,
+                "current_resources": resources,
+                "current_reality": reality,
+                "current_capabilities": capabilities,
+                "fixed_themes": list(fixed_themes),
+                "previous_theme_yield": dict(previous_theme_yield or {}),
+            },
+            schema=skill_chain_io.THEME_PLAN_SCHEMA,
+        )
+        return skill_chain_io.theme_plan_from_payload(parsed)
+
+    async def generate_theme_tasks(
+        self,
+        project,
+        theme,
+        theme_kind,
+        theme_instruction,
+        resource_info,
+        capability_info,
+        resources,
+        reality,
+        capabilities,
+        problems,
+        values,
+        demands,
+        existing_tasks,
+    ):
+        parsed = await self._interaction_json(
+            role_key="theme_task_generation",
+            input_payload={
+                "project": project,
+                "theme": theme,
+                "theme_kind": theme_kind,
+                "theme_instruction": theme_instruction,
+                "resource_info": resource_info,
+                "capability_info": capability_info,
+                "current_resources": resources,
+                "current_reality": reality,
+                "current_capabilities": capabilities,
+                "problems": problems,
+                "value_opportunities": values,
+                "capability_voids": demands,
+                "effective_existing_tasks": existing_tasks,
+            },
+            schema=skill_chain_io.THEME_TASKS_SCHEMA,
+        )
+        return skill_chain_io.theme_tasks_from_payload(parsed)

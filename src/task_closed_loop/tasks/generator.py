@@ -17,9 +17,7 @@ from task_closed_loop.tasks.finalizer import (
 from task_closed_loop.tasks.generation_audit import (
     CandidateSetStructuralAudit,
     CandidateStructuralAudit,
-    current_reality_refs,
-    materialized_reality_refs,
-    unresolved_reality_refs,
+    reference_context,
 )
 from task_closed_loop.tasks.generation_models import (
     CandidateFailureContext,
@@ -48,6 +46,11 @@ from task_closed_loop.tasks.outcome_context import (
 )
 from task_closed_loop.tasks.reality_validity import (
     TaskRealityValidityAudit,
+)
+from task_closed_loop.tasks.references import (
+    TASK_OUTCOME,
+    format_problems,
+    reference_key,
 )
 
 
@@ -162,9 +165,11 @@ class TaskGenerationEngine:
         # Need/Opportunity Discovery may only stand on reality that has already
         # been observed/materialized. An observable Capability is a sensor, not a
         # business fact. Capability-only work is created by Observation Acquisition.
-        available_refs = materialized_reality_refs(
+        references = reference_context(
             reality,
             resources,
+            capabilities,
+            allow_capability=False,
         )
         accepted: list[DiscoverySignal] = []
         seen: set[tuple[str, tuple[str, ...]]] = set()
@@ -176,22 +181,22 @@ class TaskGenerationEngine:
             relation = " ".join(
                 str(signal.reality_relation).lower().split()
             )
-            missing_refs = unresolved_reality_refs(refs, available_refs)
+            missing_refs = references.problems(refs)
             reason = ""
             if not str(signal.discovery_id).strip():
-                reason = "Discovery Signal 缺少 discovery_id。"
+                reason = "finding 缺少 finding_id。"
             elif not relation:
-                reason = "Discovery Signal 缺少 reality_relation。"
+                reason = "finding 缺少 what_was_observed。"
             elif not str(signal.user_relevance_hypothesis).strip():
-                reason = "Discovery Signal 缺少 user_relevance_hypothesis。"
+                reason = "finding 缺少 why_it_matters_to_user。"
             elif not str(signal.desired_change_or_answer).strip():
-                reason = "Discovery Signal 缺少 desired_change_or_answer。"
+                reason = "finding 缺少 desired_outcome。"
             elif not refs:
-                reason = "Discovery Signal 没有给出任何 reality_basis_refs。"
+                reason = "finding 没有给出任何 based_on_refs。"
             elif missing_refs:
                 reason = (
-                    "reality_basis_refs 无法落到当前已物化现实："
-                    + ", ".join(sorted(missing_refs))
+                    "based_on_refs 中有无法在当前输入里找到的引用："
+                    + format_problems(missing_refs)
                 )
 
             key = (relation, refs)
@@ -467,11 +472,11 @@ class TaskGenerationEngine:
                 for outcome in referenced
                 if outcome is not None
             }
-            expected_outcome_refs = {
-                f"task_outcome:{outcome_id}"
+            expected_outcome_keys = {
+                (TASK_OUTCOME, outcome_id)
                 for outcome_id in parent_outcome_set
             }
-            seed_basis_refs = {str(value) for value in seed.reality_basis_refs}
+            seed_basis_keys = {reference_key(value) for value in seed.reality_basis_refs}
             seed_identity_anchors = tuple(
                 str(value).strip()
                 for value in seed.identity_anchor_refs
@@ -484,11 +489,11 @@ class TaskGenerationEngine:
                 for ref in tuple(outcome.subject_refs or ())
                 if str(ref).strip()
             }
-            # Existing materialized Resource IDs are also safe stable anchors.
-            # Parent task_outcome:<id> refs are deliberately not considered stable
-            # object identity across re-observation cycles.
+            # Existing materialized Resources are also safe stable anchors, cited as
+            # resource:<id>. Parent task_outcome:<id> refs are deliberately not
+            # considered stable object identity across re-observation cycles.
             allowed_materialized_refs = {
-                str(resource.resource_id).strip()
+                f"resource:{str(resource.resource_id).strip()}"
                 for resource in resources
                 if str(resource.resource_id).strip()
                 and not str(resource.resource_id).startswith("task_outcome:")
@@ -513,20 +518,24 @@ class TaskGenerationEngine:
                     "Task proliferation lineage 错配：parent_task_ids 必须与 "
                     "parent_outcome_ids 实际所属 Task 完全一致。"
                 )
-            elif not expected_outcome_refs.issubset(seed_basis_refs):
+            elif not expected_outcome_keys.issubset(seed_basis_keys):
                 error = (
-                    "Task proliferation seed 必须以每个 parent Outcome 的 "
-                    "task_outcome:<outcome_id> 作为现实依据。"
+                    "task idea 的 based_on_refs 必须包含每个 source_outcome_ids 对应的 "
+                    "task_outcome:<outcome_id>（可带 #字段路径）；缺少："
+                    + ", ".join(
+                        sorted(f"{kind}:{identity}" for kind, identity in expected_outcome_keys - seed_basis_keys)
+                    )
                 )
             elif len(set(seed_identity_anchors)) != len(seed_identity_anchors):
-                error = "Task proliferation seed 的 identity_anchor_refs 必须去重并保持唯一。"
+                error = "task idea 的 about_object_refs 必须去重并保持唯一。"
             elif seed_identity_anchors and not set(seed_identity_anchors).issubset(allowed_identity_anchors):
                 error = (
-                    "Task proliferation seed 的 identity_anchor_refs 必须来自 parent Outcome "
-                    "已验证的 subject_refs 或当前已物化稳定 Resource；禁止自行发明业务对象身份。"
+                    "task idea 的 about_object_refs 只能是来源 Outcome 的 subject_refs 原样，"
+                    "或 resource:<resource_id>（不带字段路径）；禁止自行发明业务对象身份。不合规："
+                    + ", ".join(sorted(set(seed_identity_anchors) - allowed_identity_anchors))
                 )
             elif not str(seed.proliferation_reason).strip():
-                error = "Task proliferation seed 缺少 proliferation_reason。"
+                error = "task idea 缺少 why_follow_up_is_needed。"
 
             if error:
                 trace.seed_validation_errors[seed_id or "<empty-proliferation-seed>"] = error
@@ -629,8 +638,9 @@ class TaskGenerationEngine:
                             trace.seed_validation_errors[
                                 seed.seed_id
                             ] = (
-                                "Reality-discovery seed must reference "
-                                "one or more current Discovery Signals."
+                                "task idea 的 from_finding_ids 必须引用本轮 "
+                                "findings 中的一个或多个 finding_id；当前可用："
+                                + (", ".join(sorted(known_discovery_ids)) or "（无）")
                             )
                             continue
                         validated_seeds.append(

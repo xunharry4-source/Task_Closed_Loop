@@ -5,6 +5,12 @@ task_generation:
   production_pipeline:
     enabled: true
     max_rounds: ${TASK_PIPELINE_MAX_ROUNDS:3}
+  # 生成任务的第一步（Stage 3）走哪条链：
+  #   skill_chain       数据源/功能 → 项目 → 问题/价值/需求 → 主题 → 任务（每个项目各跑一条流水线）
+  #   legacy_discovery  旧链条：发现 → 任务想法 → 候选任务（单一全局 reality）
+  # Stage 4 审查、Stage 5 数量检查、Stage 6/7 与产物保存两种模式下都不变。
+  first_step:
+    mode: ${TASK_FIRST_STEP_MODE:skill_chain}
   need_opportunity_discovery:
     enabled: true
     prompt: src/task_closed_loop/prompts/need_opportunity_discovery.md

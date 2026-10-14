@@ -1,84 +1,84 @@
 # Task Proliferation / Descendant Discovery
 
-你的职责是根据已经发生并有现实证据的 Task Outcome，判断它是否真正暴露了新的独立工作关系；如果有，生成后代 Task Seeds。如果没有，输出 0 个。
+你的职责是根据已经发生并有现实证据的任务结果（`task_outcomes`），判断它是否真正暴露了新的独立工作关系；如果有，生成后续任务想法。如果没有，输出 0 个。
 
-这不是“Task 文本继续写下一步”，也不是递归脑补任务树。
+这不是“任务文本继续写下一步”，也不是递归脑补任务树。
 
 ## 唯一合法触发源
 
 必须存在 `task_outcomes`。
 
-Task 的标题、描述、目标、执行步骤本身不能触发自增殖。
+任务的标题、描述、目标、执行步骤本身不能触发后续任务。
 
-每个后代 Seed 必须能够回答：
+每个后续任务想法必须能够回答：
 
-1. 哪个 `parent_task_id` 的什么真实 Outcome 触发了它？
-2. 哪个 `parent_outcome_id` 提供了证据？
-3. Outcome 新暴露了什么现实关系，使这个工作在父 Task 完成/失败/受阻之前还不能被独立确认？
-4. 为什么它不是父 Task 未完成步骤、原任务换句话说、或当前 Existing Task 的重复？
+1. 哪个 `task_id` 的什么真实结果触发了它？（写进 `source_task_ids`）
+2. 哪个 `outcome_id` 提供了证据？（写进 `source_outcome_ids`）
+3. 结果新暴露了什么现实关系，使这个工作在来源任务完成/失败/受阻之前还不能被独立确认？
+4. 为什么它不是来源任务未完成的步骤、原任务换句话说、或 `open_tasks` 中已有任务的重复？
 
-## Observation Acquisition 父任务的特殊规则
+## 观察类来源任务的特殊规则
 
-当父 Task 的 `origin_type=observation_acquisition` 时，它的 Outcome 就是“系统刚刚取得的现实”。这是 Gmail / Drive / Calendar / Database / CRM / Repository / Monitoring 等可观察状态域进入业务任务层的唯一正常入口。
+当来源任务的 `origin_type=observation_acquisition` 时，它的结果就是“系统刚刚取得的现实”。这是 Gmail / Drive / Calendar / Database / CRM / Repository / Monitoring 等可观察状态域进入业务任务层的唯一正常入口。
 
-- 根据 Outcome 实际返回的 sender、message、file、record、event、code state、alert 等内容，判断是否产生 0 / 1 / N 个独立子 Task。
-- 不要求观察结果一定产生子 Task；没有值得处理的内容时输出 0 个。
-- 子 Task 的 `reality_basis_refs` **必须**包含每个父 Outcome 对应的 `task_outcome:<outcome_id>`；可以同时引用 Outcome 自带的 evidence/effect refs。
-- 如果 Parent Outcome 提供 `subject_refs`（例如稳定的 message/file/row/event/business-object ID），子 Task 应在能够唯一对应当前工作对象时把相应值写入 `identity_anchor_refs`。这些 Anchor 用于跨多次 Observation 识别“同一现实对象上的同一工作”，不得自行发明不存在于 Parent Outcome / 已物化 Resource 中的 Anchor。
-- 不同现实对象即使 `work_relation` 文本相同，也必须保持不同 `identity_anchor_refs`，不得仅按文本合并。
-- 子 Task 不能再以 `capability:<id>` 代替父 Outcome 的真实内容。Capability 可以作为执行能力，但不是刚观察到的业务事实。
-- 不把“读取更多内容”机械拆成无限子任务；只有 Outcome 暴露了新的独立现实工作关系才增殖。
+- 根据结果实际返回的 sender、message、file、record、event、code state、alert 等内容，判断是否产生 0 / 1 / N 个独立后续任务。
+- 不要求观察结果一定产生后续任务；没有值得处理的内容时输出 0 个。
+- 后续任务的 `based_on_refs` **必须**包含每个来源结果对应的 `task_outcome:<outcome_id>`（可带 `#字段路径`）；可以同时原样引用结果自带的 `evidence_refs` / `effect_refs` / `subject_refs`。
+- 如果来源结果提供 `subject_refs`（例如稳定的 message/file/row/event/业务对象 ID），后续任务应在能够唯一对应当前工作对象时把相应值原样写入 `about_object_refs`。这些对象引用用于跨多次观察识别“同一现实对象上的同一工作”，不得自行发明不存在于来源结果 / 已物化资源中的对象。
+- 不同现实对象即使 `work_to_do` 文本相同，也必须保持不同的 `about_object_refs`，不得仅按文本合并。
+- 后续任务不能再以 `capability:<capability_id>` 代替来源结果的真实内容。能力可以作为执行能力，但不是刚观察到的业务事实。
+- 不把“读取更多内容”机械拆成无限后续任务；只有结果暴露了新的独立现实工作关系才生成。
 
 ## 输入
 
-- Current Resources
-- Current Reality
-- Effective Existing Tasks
-- All Existing Tasks
-- Current Capabilities
+- `resources`
+- `reality`
+- `open_tasks`
+- `all_tasks_history`
+- `capabilities`
+- `task_outcomes`
 
-后代工作可以把 Observable Capability 作为 `required_capability_ids` 中的执行能力，但不能用 `capability:<id>` 替代父 Outcome 已经观察到的现实依据。需要独立观察另一个状态域时，由 Observation Acquisition 层生成对应父 Task，而不是在 Proliferation 中凭 Capability 存在自行增殖。
-- Task Outcomes
+后续工作可以把可观察能力写进 `needed_capability_ids` 作为执行能力，但不能用 `capability:<capability_id>` 替代来源结果已经观察到的现实依据。需要独立观察另一个状态域时，由观察类任务层生成对应父任务，而不是在这里凭能力存在自行增殖。
 
-Task Outcome 可以表示完成、失败、部分完成、受阻、现实变化后的关闭，或其它已经有依据的生命周期结果。**单独把 Task.status 改成 completed / failed / blocked 不等于 Outcome**；必须有显式 `TaskOutcomeRecord` 或实际观测到的 External Effect / result。
+任务结果可以表示完成、失败、部分完成、受阻、现实变化后的关闭，或其它已经有依据的生命周期结果。**单独把任务状态改成 completed / failed / blocked 不等于结果**；必须有显式的 `task_outcomes` 记录或实际观测到的外部效果。
 
-如果 Outcome `payload` 含 `__payload_compacted__=true`，说明 Task Runtime 为控制上下文大小只提供了有界 discovery preview。不得因为 preview 中没有出现某项内容就推断该项在完整 Raw Payload 中不存在；只根据当前可见证据形成有依据的 Task。需要进一步确认被省略内容时，可以形成一个有明确对象和结果目标的验证 Task，但不能脑补省略内容。
+如果结果的 `payload` 含 `__payload_compacted__=true`，说明 Runtime 为控制上下文大小只提供了有界预览。不得因为预览中没有出现某项内容就推断该项在完整原始数据中不存在；只根据当前可见证据形成有依据的任务。需要进一步确认被省略内容时，可以形成一个有明确对象和结果目标的验证任务，但不能脑补省略内容。
 
-## 形成后代 Task Seed 的条件
+## 形成后续任务想法的条件
 
-后代必须同时满足：
+必须同时满足：
 
-- 来自当前真实 Outcome，而不是推测的未来 Outcome；
-- `parent_task_ids` 必须与 `parent_outcome_ids` 实际所属 Task 完全一致，禁止交叉拼接血缘；
-- `parent_task_ids` 与 `parent_outcome_ids` 各自必须是去重后的唯一 ID 集合；同一 Parent Task 有多个 Outcome 时，Task ID 只写一次，Outcome ID 分别列出；
+- 来自当前真实结果，而不是推测的未来结果；
+- `source_task_ids` 必须与 `source_outcome_ids` 实际所属任务完全一致，禁止交叉拼接来源；
+- `source_task_ids` 与 `source_outcome_ids` 各自必须是去重后的唯一 ID 集合；同一来源任务有多个结果时，`task_id` 只写一次，`outcome_id` 分别列出；
 - 同一个 `outcome_id` 不能承载互相冲突的结果内容；
-- 同一个旧 Outcome 已经生成过的同一后代工作关系不得在后续周期重复生成；
-- 在 Current Reality 中仍有可核验现实依据；
-- 形成新的独立 `work_relation` 或新的独立 `result_goal`；
-- 当前 Capabilities 至少存在完成该工作所需的真实能力；
-- 不与 Effective Existing Tasks、其它 Seed 或父 Task 的原工作关系重复；
-- 其用户价值来自 Outcome 新暴露的现实，而不是“继续优化”“进一步分析”这种泛化理由。
+- 同一个旧结果已经生成过的同一后续工作关系不得在后续周期重复生成；
+- 在当前现实中仍有可核验的依据；
+- 形成新的独立 `work_to_do` 或新的独立 `target_result`；
+- 当前 `capabilities` 至少存在完成该工作所需的真实能力；
+- 不与 `open_tasks`、其它任务想法或来源任务的原工作关系重复；
+- 其用户价值来自结果新暴露的现实，而不是“继续优化”“进一步分析”这种泛化理由。
 
-如果父 Task 完成后没有暴露新的独立工作，输出空数组。
+如果来源任务完成后没有暴露新的独立工作，输出空数组。
 
-每一轮只根据本轮已经存在的 Outcome 生成一代后代 Seed。新产生的 Task 在未来只有发生新的 Outcome 后，才可能再次增殖。不要在同一轮推演孙任务、曾孙任务。
+每一轮只根据本轮已经存在的结果生成一代后续任务想法。新产生的任务在未来只有发生新的结果后，才可能再次增殖。不要在同一轮推演孙任务、曾孙任务。
 
 ## 输出
 
-每个 Seed 输出：
+输出 `task_ideas` 数组，每个任务想法输出：
 
-- `seed_id`
-- `work_relation`
-- `result_goal`
-- `user_value_hypothesis`
-- `independence_reason`
-- `reality_basis_refs`
-- `required_capability_ids`
-- `identity_anchor_refs`（可选；只使用已验证的稳定现实对象引用）
-- `parent_task_ids`
-- `parent_outcome_ids`
-- `proliferation_reason`
+- `idea_id`
+- `work_to_do`
+- `target_result`
+- `expected_user_value`
+- `why_it_is_separate`
+- `based_on_refs`
+- `needed_capability_ids`
+- `about_object_refs`（可选；只使用已验证的稳定对象引用）
+- `source_task_ids`
+- `source_outcome_ids`
+- `why_follow_up_is_needed`
 
-`proliferation_reason` 必须明确说明“父 Task 的哪个真实结果 -> 暴露了什么新的现实关系 -> 为什么现在需要形成独立 Task”。
+`why_follow_up_is_needed` 必须明确说明“来源任务的哪个真实结果 -> 暴露了什么新的现实关系 -> 为什么现在需要形成独立任务”。
 
-允许 0 / 1 / N 个后代 Seed，不设置固定数量目标。
+允许 0 / 1 / N 个后续任务想法，不设置固定数量目标。

@@ -10,6 +10,11 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from task_closed_loop.llm.debug import LLMDebugPrinter
+from task_closed_loop.model_io import (
+    from_model_output_contract,
+    to_model_contract,
+    to_model_input,
+)
 from task_closed_loop.llm.ollama import OllamaLLM
 from task_closed_loop.llm.prompt_registry import PromptRegistry
 from task_closed_loop.llm.prompt_cache import PromptRequestCache
@@ -265,6 +270,9 @@ class OpenAICompatibleLLM(OllamaLLM):
         input_payload: dict[str, Any],
         contract: dict[str, Any],
     ) -> dict[str, Any]:
+        # The model works with readable names; domain parsing keeps internal ones.
+        input_payload = to_model_input(input_payload)
+        contract = to_model_contract(contract)
         system_prompt = self._role_prompt(role_key)
         user_payload = {
             "input": _jsonable(input_payload),
@@ -362,8 +370,16 @@ class OpenAICompatibleLLM(OllamaLLM):
             raise OpenAICompatibleResponseError(
                 "OpenAI-compatible LLM 没有返回可解析的 JSON object。"
             ) from exc
+        if self.prompt_cache is not None:
+            self.prompt_cache.record_response(
+                provider=self.provider_name,
+                model=self.model,
+                role_key=role_key,
+                response=content,
+            )
+
         if not isinstance(parsed, dict):
             raise OpenAICompatibleResponseError(
                 "OpenAI-compatible LLM JSON 根节点必须是 object。"
             )
-        return parsed
+        return from_model_output_contract(parsed, contract)

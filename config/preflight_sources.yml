@@ -7,6 +7,21 @@ preflight_inputs:
     # Empty means: select the first READY engine from execution.capability_project.allowed_cli_engines.
     engine: ${PREFLIGHT_CLI_ENGINE:}
 
+  # ── 所属项目：自动判断，不用你填 ──────────────────────────────────
+  # 每份资源属于哪个项目，由系统自己判断：拿项目清单（config/projects.yml 的
+  # id / 名称 / 说明）对照这份资源的简介与 Stage 2 实际扫描到的情况。
+  # 一份资源可以同时属于多个项目（行情数据既是数据管线在维护的，也是各策略在用的），
+  # 结果缓存在 cli_project/state/project_assignment.yml，项目或资源没变就不再重复判断。
+  #
+  # 只有想手工钉住某一份资源时才写 entities（可选覆盖）：
+  #   entities:
+  #     - id: data_pipeline
+  #       note: 只使用 day/ week/ 整合交易数据 三个目录
+  #
+  # 功能（functions）不分项目：所有项目都可以使用全部已配置的功能。
+  # 唯一的隔离边界是资源。
+  # ───────────────────────────────────────────────────────────────
+
   # 本地资源目录。相对路径相对 task-closed-loop 项目根目录解析；目录不存在时 Stage 2 拒绝启动。
   #
   # description 必填，由你填写：

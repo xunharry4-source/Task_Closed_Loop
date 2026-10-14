@@ -5,9 +5,12 @@
 diagnostics:
   enabled: true
 
-  # Diagnostic-only prompt persistence. Default OFF because prompts may contain Resource content.
+  # Every model call's exact prompt and raw answer, written to
+  #   <directory>/<YYYY-MM>/<flow_id>/prompts/
+  # Prompts embed Resource content, so this stays local: log/ is gitignored.
+  # Set PROMPT_CACHE_ENABLED=false to turn it off.
   prompt_cache:
-    enabled: ${PROMPT_CACHE_ENABLED:false}
+    enabled: ${PROMPT_CACHE_ENABLED:true}
     directory: ${PROMPT_CACHE_DIR:log}
 
   # Diagnostics remains outside Runtime Core.

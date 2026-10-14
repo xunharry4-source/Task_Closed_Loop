@@ -10,7 +10,13 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from task_closed_loop.llm.debug import LLMDebugPrinter
+from task_closed_loop.model_io import (
+    from_model_output_contract,
+    to_model_contract,
+    to_model_input,
+)
 from task_closed_loop.llm.prompt_registry import PromptRegistry
+from task_closed_loop.llm import skill_chain_io
 from task_closed_loop.llm.prompt_cache import PromptRequestCache
 from task_closed_loop.reality.models import RealitySnapshot
 from task_closed_loop.tasks.generation_models import (
@@ -258,6 +264,9 @@ class OllamaLLM:
         input_payload: dict[str, Any],
         contract: dict[str, Any],
     ) -> dict[str, Any]:
+        # The model works with readable names; domain parsing keeps internal ones.
+        input_payload = to_model_input(input_payload)
+        contract = to_model_contract(contract)
         system_prompt = self._role_prompt(
             role_key
         )
@@ -355,12 +364,20 @@ class OllamaLLM:
                 "LLM 没有返回可解析的 JSON object。"
             ) from exc
 
+        if self.prompt_cache is not None:
+            self.prompt_cache.record_response(
+                provider="ollama",
+                model=self.model,
+                role_key=role_key,
+                response=content,
+            )
+
         if not isinstance(parsed, dict):
             raise OllamaResponseError(
                 "LLM JSON 根节点必须是 object。"
             )
 
-        return parsed
+        return from_model_output_contract(parsed, contract)
 
     async def build_reality(
         self,
@@ -1198,3 +1215,124 @@ class OllamaLLM:
                 parsed.get("reason") or ""
             ),
         )
+
+    # ---- first-step chain: project -> problem / value / demand -> task ----
+
+    async def assign_resources_to_projects(self, projects, resources, reality):
+        parsed = await self._chat_json(
+            role_key="project_assignment",
+            input_payload={
+                "projects": projects,
+                "current_resources": resources,
+                "current_reality": reality,
+            },
+            contract=skill_chain_io.ASSIGNMENT_CONTRACT,
+        )
+        return skill_chain_io.assignments_from_payload(parsed)
+
+    async def discover_project_problems(
+        self, project, resources, reality, capabilities, existing_tasks
+    ):
+        parsed = await self._chat_json(
+            role_key="problem_discovery",
+            input_payload={
+                "project": project,
+                "current_resources": resources,
+                "current_reality": reality,
+                "current_capabilities": capabilities,
+                "effective_existing_tasks": existing_tasks,
+            },
+            contract=skill_chain_io.PROBLEMS_CONTRACT,
+        )
+        return skill_chain_io.problems_from_payload(parsed)
+
+    async def discover_project_values(
+        self, project, resources, reality, capabilities, existing_tasks
+    ):
+        parsed = await self._chat_json(
+            role_key="value_discovery",
+            input_payload={
+                "project": project,
+                "current_resources": resources,
+                "current_reality": reality,
+                "current_capabilities": capabilities,
+                "effective_existing_tasks": existing_tasks,
+            },
+            contract=skill_chain_io.VALUES_CONTRACT,
+        )
+        return skill_chain_io.values_from_payload(parsed)
+
+    async def discover_project_demands(
+        self, project, resources, reality, capabilities
+    ):
+        parsed = await self._chat_json(
+            role_key="demand_discovery",
+            input_payload={
+                "project": project,
+                "current_resources": resources,
+                "current_reality": reality,
+                "current_capabilities": capabilities,
+            },
+            contract=skill_chain_io.DEMANDS_CONTRACT,
+        )
+        return skill_chain_io.demands_from_payload(parsed)
+
+    async def plan_project_themes(
+        self,
+        project,
+        resources,
+        reality,
+        capabilities,
+        fixed_themes,
+        previous_theme_yield,
+    ):
+        parsed = await self._chat_json(
+            role_key="theme_planner",
+            input_payload={
+                "project": project,
+                "current_resources": resources,
+                "current_reality": reality,
+                "current_capabilities": capabilities,
+                "fixed_themes": list(fixed_themes),
+                "previous_theme_yield": dict(previous_theme_yield or {}),
+            },
+            contract=skill_chain_io.THEME_PLAN_CONTRACT,
+        )
+        return skill_chain_io.theme_plan_from_payload(parsed)
+
+    async def generate_theme_tasks(
+        self,
+        project,
+        theme,
+        theme_kind,
+        theme_instruction,
+        resource_info,
+        capability_info,
+        resources,
+        reality,
+        capabilities,
+        problems,
+        values,
+        demands,
+        existing_tasks,
+    ):
+        parsed = await self._chat_json(
+            role_key="theme_task_generation",
+            input_payload={
+                "project": project,
+                "theme": theme,
+                "theme_kind": theme_kind,
+                "theme_instruction": theme_instruction,
+                "resource_info": resource_info,
+                "capability_info": capability_info,
+                "current_resources": resources,
+                "current_reality": reality,
+                "current_capabilities": capabilities,
+                "problems": problems,
+                "value_opportunities": values,
+                "capability_voids": demands,
+                "effective_existing_tasks": existing_tasks,
+            },
+            contract=skill_chain_io.THEME_TASKS_CONTRACT,
+        )
+        return skill_chain_io.theme_tasks_from_payload(parsed)
