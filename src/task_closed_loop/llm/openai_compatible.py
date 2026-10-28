@@ -72,6 +72,7 @@ class OpenAICompatibleTransport:
         base_url: str,
         timeout_seconds: float,
         api_key: str,
+        extra_headers: dict[str, str] | None = None,
     ):
         base_url = str(base_url or "").strip().rstrip("/")
         if not base_url:
@@ -81,6 +82,12 @@ class OpenAICompatibleTransport:
         self.base_url = base_url
         self.timeout_seconds = float(timeout_seconds)
         self.api_key = str(api_key or "").strip()
+        # 网关要求或建议的附加头（如 OpenRouter 的 HTTP-Referer / X-Title）。
+        self.extra_headers = {
+            str(key): str(value)
+            for key, value in (extra_headers or {}).items()
+            if str(value).strip()
+        }
 
     def _request_json(
         self,
@@ -92,6 +99,7 @@ class OpenAICompatibleTransport:
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
+            **self.extra_headers,
         }
         body = None
         if payload is not None:
@@ -164,7 +172,7 @@ class OpenAICompatibleTransport:
 
 
 class OpenAICompatibleLLM(OllamaLLM):
-    """Chat Completions adapter for OpenAI and DeepSeek compatible APIs."""
+    """Chat Completions adapter for OpenAI / DeepSeek / OpenRouter 这类兼容 API。"""
 
     def __init__(
         self,
@@ -185,6 +193,7 @@ class OpenAICompatibleLLM(OllamaLLM):
         prompt_cache: PromptRequestCache | None = None,
         debugger: LLMDebugPrinter | None = None,
         extra_request_fields: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
     ):
         provider_name = str(provider_name or "").strip().lower()
         model = str(model or "").strip()
@@ -231,11 +240,9 @@ class OpenAICompatibleLLM(OllamaLLM):
             base_url=base_url,
             timeout_seconds=timeout_seconds,
             api_key=api_key,
+            extra_headers=extra_headers,
         )
 
-    def _role_prompt(self, role_key: str) -> str:
-        prompt_name = self.roles.get(role_key, role_key)
-        return self.prompts.get(prompt_name)
 
     async def validate_connection(self) -> None:
         result = await self.transport.get_json("/models")
@@ -273,11 +280,12 @@ class OpenAICompatibleLLM(OllamaLLM):
         # The model works with readable names; domain parsing keeps internal ones.
         input_payload = to_model_input(input_payload)
         contract = to_model_contract(contract)
-        system_prompt = self._role_prompt(role_key)
-        user_payload = {
-            "input": _jsonable(input_payload),
-            "response_contract": contract,
-        }
+        built = self._build_prompt(role_key, input_payload)
+        system_prompt = built.text
+        user_payload: dict[str, Any] = {}
+        if built.include_input:
+            user_payload["input"] = _jsonable(input_payload)
+        user_payload["response_contract"] = contract
         if self.prompt_cache is not None:
             self.prompt_cache.record(
                 provider=self.provider_name,

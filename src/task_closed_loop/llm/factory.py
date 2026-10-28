@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from task_closed_loop.cli_choice import configured_cli_engine
 from task_closed_loop.llm.debug import (
     LLMDebugPrinter,
 )
@@ -52,6 +53,7 @@ SUPPORTED_ADAPTERS = (
     "lmstudio",
     "openai",
     "deepseek",
+    "openrouter",
 )
 
 SUPPORTED_PROFILES = (
@@ -99,19 +101,30 @@ def build_llm(
         or ""
     ).strip().lower()
 
+    profile_upper = profile.upper()
+
+    # 第一步只配一个 CLI。没有单独设置 TASK_LLM_ADAPTER / AUDIT_LLM_ADAPTER 时，
+    # 推理就用那个 CLI；设置了就按设置走。
+    if not adapter:
+        adapter = configured_cli_engine(config)
+        if adapter and adapter not in SUPPORTED_ADAPTERS:
+            raise LLMNotConfiguredError(
+                f"preflight_inputs.cli 选的 CLI（{adapter}）只能做第二步的分析，"
+                f"不能用于{profile_upper}推理："
+                f"请把 cli 换成 codex / gemini，或单独设置 {profile_upper}_LLM_ADAPTER。"
+            )
+
     model = str(
         profile_cfg.get("model")
         or ""
     ).strip()
 
-    profile_upper = profile.upper()
-
     if not adapter:
         raise LLMNotConfiguredError(
             f"{profile_upper} LLM 未配置："
-            f"请设置 {profile_upper}_LLM_ADAPTER。"
+            f"请在 config/preflight_sources.yml 配 cli，或设置 {profile_upper}_LLM_ADAPTER。"
             " 当前支持："
-            "gemini、gemini_cli、codex_cli、gemma、ollama、lmstudio、openai、deepseek。"
+            "gemini、gemini_cli、codex_cli、gemma、ollama、lmstudio、openai、deepseek、openrouter。"
         )
 
     if adapter not in SUPPORTED_ADAPTERS:
@@ -119,7 +132,7 @@ def build_llm(
             f"不支持的 {profile_upper}_LLM_ADAPTER："
             f"{adapter}。"
             " 当前支持："
-            "gemini、gemini_cli、codex_cli、gemma、ollama、lmstudio、openai、deepseek。"
+            "gemini、gemini_cli、codex_cli、gemma、ollama、lmstudio、openai、deepseek、openrouter。"
         )
 
     # The local CLI picks its own default model when none is configured.
@@ -279,6 +292,7 @@ def build_llm(
     if adapter in {
         "openai",
         "deepseek",
+        "openrouter",
     }:
         provider_cfg = (
             llm_cfg.get(adapter) or {}
@@ -291,11 +305,11 @@ def build_llm(
             **profile_provider_cfg,
         }
 
-        env_name = (
-            "OPENAI_API_KEY"
-            if adapter == "openai"
-            else "DEEPSEEK_API_KEY"
-        )
+        env_name = {
+            "openai": "OPENAI_API_KEY",
+            "deepseek": "DEEPSEEK_API_KEY",
+            "openrouter": "OPENROUTER_API_KEY",
+        }[adapter]
         api_key = str(
             merged_provider_cfg.get(
                 "api_key"
@@ -310,13 +324,39 @@ def build_llm(
                 f"请设置 {env_name}。"
             )
 
-        default_base_url = (
-            "https://api.openai.com/v1"
-            if adapter == "openai"
-            else "https://api.deepseek.com"
-        )
+        default_base_url = {
+            "openai": "https://api.openai.com/v1",
+            "deepseek": "https://api.deepseek.com",
+            # OpenRouter 是网关：同一个 key 走很多模型，模型名带厂商前缀，
+            # 例如 deepseek/deepseek-v4.1-flash。
+            "openrouter": "https://openrouter.ai/api/v1",
+        }[adapter]
+
+        extra_headers: dict[str, str] | None = None
+        if adapter == "openrouter":
+            model_name = model
+            if "/" not in model_name:
+                raise OpenAICompatibleConfigurationError(
+                    f"OpenRouter 的模型名要带厂商前缀，收到 {model_name!r}；"
+                    " 例如 deepseek/deepseek-v4.1-flash。"
+                )
+            # OpenRouter 建议（非必需）带上署名头，用于在它的后台区分来源。
+            extra_headers = {
+                "HTTP-Referer": str(merged_provider_cfg.get("referer") or "").strip(),
+                "X-Title": str(merged_provider_cfg.get("title") or "").strip(),
+            }
 
         deepseek_extra = None
+        if adapter == "openrouter":
+            effort = str(
+                merged_provider_cfg.get("reasoning_effort") or ""
+            ).strip().lower()
+            if effort:
+                if effort not in {"low", "medium", "high"}:
+                    raise OpenAICompatibleConfigurationError(
+                        "OPENROUTER_REASONING_EFFORT 仅支持 low / medium / high。"
+                    )
+                deepseek_extra = {"reasoning": {"effort": effort}}
         if adapter == "deepseek":
             thinking_type = str(
                 merged_provider_cfg.get("thinking") or "enabled"
@@ -379,6 +419,7 @@ def build_llm(
             prompt_cache=prompt_cache,
             debugger=debugger,
             extra_request_fields=deepseek_extra,
+            extra_headers=extra_headers,
         )
 
     if adapter == "lmstudio":

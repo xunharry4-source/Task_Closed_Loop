@@ -23,7 +23,7 @@ from task_closed_loop.preflight.cli_preflight import (
     PreflightAnalysisError,
     PreflightSourceConfigurationError,
 )
-from task_closed_loop.projects.config import ProjectConfigurationError
+from task_closed_loop.projects.discovery import ProjectDiscoveryError
 from task_closed_loop.store.task_store import TaskStoreError
 from task_closed_loop.task_inputs import (
     TaskInputConfigurationError,
@@ -86,10 +86,9 @@ def run(
             file=sys.stderr,
         )
         raise SystemExit(7)
-    except ProjectConfigurationError as exc:
-        # Project ownership is the user's statement; guessing it would mix projects.
+    except ProjectDiscoveryError as exc:
         print(
-            f"[PROJECT CONFIG ERROR] {exc}",
+            f"[PROJECT ERROR] {exc}",
             file=sys.stderr,
         )
         raise SystemExit(8)

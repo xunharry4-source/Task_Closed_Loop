@@ -1,0 +1,58 @@
+# 这个文件分两部分：
+#   给用户看的：说明 / 变量          —— 系统完全不读，爱写多少写多少
+#   给系统用的：设置 / 提示词        —— 系统只读这两个
+#
+# 变量由系统提供（见 src/task_closed_loop/llm/prompt_template.py 的 VARIABLES），你只管用：
+# 把 {{变量名}} 放到提示词正文的任何位置，本轮的真实内容就替换在那个位置；
+# 调整它在正文里的位置，就等于调整提示词——替换照旧正确。
+角色: task_reality_validity
+说明: |
+  第六步：核对最终任务与项目的资源、功能是否仍然对得上。
+  共享段（引用语法）：stage_io_contract
+变量:
+  "{{功能}}": 可用功能：每条是功能名 function + identity（谁开发的、什么类型的工具），不含「能做什么」（英文别名 {{capabilities}}）
+  "{{资源}}": 本项目的资源：第四、五步只给 id + summary（现在有什么、到什么程度），审核与旧链条给完整分析结果（英文别名 {{resources}}）
+  "{{待审任务}}": 正在审的那一条任务（第六步逐条审核）（英文别名 {{task_under_review}}）
+  "{{输入}}": 特殊变量：本轮输入的全部内容（JSON）（英文别名 {{input}}）
+  "{{引用语法}}": 特殊变量：共享的引用语法段（英文别名 {{reference_syntax}}）
+  "{{角色}}": 特殊变量：角色名（英文别名 {{role}}）
+设置:
+  append_input: auto      # auto 默认（正文用了输入变量就不再追加【本轮输入】）/ always 总是追加 / never 从不追加
+  includes: true          # true 默认：保留共享段 / false：不要
+
+提示词: |
+  # Task Reality Validity
+
+  已形成的这条任务：
+
+  {{待审任务}}
+
+  项目的资源：
+
+  {{资源}}
+
+  可用功能：
+
+  {{功能}}
+
+  重新依据上面的资源与功能，判断这段工作关系现在是否仍然成立。
+
+  审查：
+
+  - `task_key` 是否仍对应当前真实工作关系
+  - `basis_explanation` 与 `metadata.based_on_refs` 指向的依据是否仍然存在
+  - 任务所依赖的资源是否仍可见、仍具有相同现实含义
+  - 任务若依赖 `capability:<capability_id>` 作为观察依据，对应能力是否仍然 available 且 `can_observe_state=true`
+  - 任务所需能力（`metadata.needed_capability_ids`）是否仍然真实可用
+  - 任务所依赖的现实关系是否已经完成、消失、被替换或发生实质改变
+
+  引用格式与引用路径是否存在由 Host 程序校验；你判断的是被引用的内容现在是否仍然支持这项工作。
+
+  输出 `status`，只能是：
+
+  - valid
+  - invalid
+  - replaced
+  - completed
+
+  并在证据 / `reason` 中给出支持当前判断的现实依据。

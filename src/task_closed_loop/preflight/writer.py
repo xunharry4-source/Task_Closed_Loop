@@ -29,6 +29,7 @@ def _resource_dict(record: PreflightResourceRecord) -> dict:
         "id": record.resource_id,
         "provider_id": record.provider_id,
         "type": record.resource_type,
+        "summary": record.summary,
         "source_identity": record.source_identity,
         "availability": record.availability,
         "revision": record.revision,
@@ -42,6 +43,8 @@ def _capability_dict(record: PreflightCapabilityRecord) -> dict:
         "id": record.capability_id,
         "provider_id": record.provider_id,
         "action_type": record.action_type,
+        # Identity only: who made it, what kind of tool it is. Never its abilities.
+        "identity": record.identity,
         "description": record.description,
         "principal": record.principal,
         "security_domain": record.security_domain,

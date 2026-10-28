@@ -121,6 +121,18 @@ class CandidateReview:
 
 
 @dataclass(frozen=True)
+class CandidateFieldReview:
+    """Sixth-step field-quality review; only runs after core validity passes."""
+
+    candidate_id: str
+    repair_required: bool
+    field_issues: tuple[str, ...] = ()
+    challenge: str = ""
+    evidence: tuple[str, ...] = ()
+    reason: str = ""
+
+
+@dataclass(frozen=True)
 class CandidateSetReview:
     keep_candidate_ids: tuple[str, ...]
     challenge: str

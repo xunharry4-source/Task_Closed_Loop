@@ -16,8 +16,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from task_closed_loop.app.orchestrator import RuntimeCycleInput
+from task_closed_loop.app.orchestrator import PreparedRuntimeContext
 from task_closed_loop.contracts import TaskDraftBatch
+from task_closed_loop.reality.models import RealitySnapshot
 from task_closed_loop.tasks.generation_models import TaskGenerationTrace
 from task_closed_loop.tasks.generator import TaskDraftBatch as DomainDraftBatch
 from task_closed_loop.tasks.skill_chain_models import (
@@ -60,7 +61,6 @@ class ChainState:
     demands: list[Any] = field(default_factory=list)
     source_ids: dict[str, tuple[str, int]] = field(default_factory=dict)
     resource_info: str = ""
-    capability_info: str = ""
     resources: list[Any] = field(default_factory=list)
     capabilities: list[Any] = field(default_factory=list)
     project_payload: dict[str, Any] = field(default_factory=dict)
@@ -68,6 +68,25 @@ class ChainState:
     open_tasks: list[dict[str, str]] = field(default_factory=list)
     # function name -> the capability ids Stage 2 reported for it
     capability_ids_by_function: dict[str, tuple[str, ...]] = field(default_factory=dict)
+
+
+def _host_reality(scope: ProjectScope, *, week: str) -> RealitySnapshot:
+    """The "current reality" object, built by the Host instead of by a model call.
+
+    Each resource now carries a `summary` written by the analysis — what it is, what it
+    holds now, how far along it is — which is exactly what a reality builder used to
+    compress out of the raw payload. So the layer is gone and this object exists only to
+    keep the contract DTOs populated and the `reality_id` checks trivially consistent.
+    """
+
+    facts = {
+        str(brief.get("resource_id")): str(brief.get("summary") or "")
+        for brief in scope.resource_briefs
+    }
+    return RealitySnapshot(
+        reality_id=f"{scope.project.project_id}-{week}" if week else scope.project.project_id,
+        current_facts=facts,
+    )
 
 
 def _matches_exclusion(text: str, patterns: list[str]) -> str:
@@ -103,6 +122,10 @@ class ProjectChainTaskGenerator:
         self.logger = logger
         self.chain_trace = ProjectChainTrace(project_id=self.project_id)
         self.state: ChainState | None = None
+        # Every source the themes of this project pointed at. Stage 7's supplementary
+        # angles inherit from this pool: they are another way of looking at the same
+        # project, not a new source of truth.
+        self.theme_sources: tuple[str, ...] = ()
 
     # -- helpers ------------------------------------------------------------
 
@@ -150,18 +173,19 @@ class ProjectChainTaskGenerator:
     async def generate(self, resources, capabilities) -> TaskDraftBatch:
         self.scope = self._scope_provider()
         components = await self.runtime_provider.validate_task()
-        orchestrator = components.orchestrator
         reasoner = components.task_llm
         project = self.scope.project
 
-        prepared = await orchestrator.prepare_context(
-            RuntimeCycleInput(
-                resources=list(resources),
-                capabilities=list(capabilities),
-                existing_tasks=[],
-            )
+        reality = _host_reality(self.scope, week=self.week)
+        prepared = PreparedRuntimeContext(
+            resources=list(resources),
+            capabilities=list(capabilities),
+            all_existing_tasks=[],
+            effective_existing_tasks=[],
+            task_outcomes=[],
+            consumed_outcome_ids=[],
+            reality=reality,
         )
-        reality = prepared.reality
         self.chain_trace.reality_id = str(reality.reality_id)
         project_payload = _project_payload(self.scope)
         trace = TaskGenerationTrace()
@@ -179,11 +203,10 @@ class ProjectChainTaskGenerator:
         # through the reality just built from the full resources. Stage 4 still audits
         # against the full objects.
         resource_view = [dict(brief) for brief in self.scope.resource_briefs]
-        capability_view = list(self.scope.capability_briefs)
+        capability_view = [dict(brief) for brief in self.scope.capability_briefs]
         common = {
             "project": project_payload,
             "resources": resource_view,
-            "reality": reality,
             "capabilities": capability_view,
         }
 
@@ -220,6 +243,9 @@ class ProjectChainTaskGenerator:
         plan = await self._safe(
             "theme_plan",
             reasoner.plan_project_themes(
+                problems=problems,
+                values=values,
+                demands=demands,
                 fixed_themes=list(FIXED_THEMES),
                 previous_theme_yield=(
                     self.store.previous_theme_yield(
@@ -243,7 +269,6 @@ class ProjectChainTaskGenerator:
             demands=list(demands),
             source_ids=source_ids,
             resource_info=plan.resource_info if plan else "",
-            capability_info=plan.capability_info if plan else "",
             resources=resource_view,
             capabilities=capability_view,
             project_payload=project_payload,
@@ -252,9 +277,15 @@ class ProjectChainTaskGenerator:
             capability_ids_by_function=dict(self.scope.capability_ids_by_function or {}),
         )
 
+        self.theme_sources = tuple(
+            dict.fromkeys(ref for _, _, refs in themes for ref in refs)
+        )
+
         candidates: list[Any] = []
-        for theme, theme_kind in themes:
-            candidates.extend(await self.ask_theme(theme=theme, theme_kind=theme_kind))
+        for theme, theme_kind, sources in themes:
+            candidates.extend(
+                await self.ask_theme(theme=theme, theme_kind=theme_kind, sources=sources)
+            )
 
         trace.rejected_discovery_reasons.update(self.chain_trace.dropped_records)
         trace.seed_validation_errors.update(self.chain_trace.dropped_candidates)
@@ -279,6 +310,7 @@ class ProjectChainTaskGenerator:
         *,
         theme: str,
         theme_kind: str,
+        sources: tuple[str, ...] = (),
         instruction: str = "",
         extra_tasks: list[dict[str, str]] | None = None,
         stage: int = 3,
@@ -301,7 +333,11 @@ class ProjectChainTaskGenerator:
                 theme=theme,
                 theme_kind=theme_kind,
                 resource_info=state.resource_info,
-                capability_info=state.capability_info,
+                # The task store column exists; the functions' own identity lines are
+                # enough, so nothing describes "what a function can do".
+                capability_info=", ".join(
+                    str(brief.get("function") or "") for brief in state.capabilities
+                ),
             )
 
         produced = await self._safe(
@@ -312,13 +348,8 @@ class ProjectChainTaskGenerator:
                 theme_kind=theme_kind,
                 theme_instruction=instruction or theme_instruction(theme, theme_kind),
                 resource_info=state.resource_info,
-                capability_info=state.capability_info,
                 resources=state.resources,
-                reality=state.reality,
                 capabilities=state.capabilities,
-                problems=state.problems,
-                values=state.values,
-                demands=state.demands,
                 existing_tasks=state.open_tasks + list(extra_tasks or []),
             ),
             default=[],
@@ -327,12 +358,8 @@ class ProjectChainTaskGenerator:
             produced,
             theme=theme,
             theme_kind=theme_kind,
+            sources=sources,
             reality_id=str(state.reality.reality_id),
-            source_ids=state.source_ids,
-            problems=state.problems,
-            values=state.values,
-            demands=state.demands,
-            patterns=state.patterns,
         )
         self.chain_trace.themes_asked.append(theme)
         self.chain_trace.candidate_counts[theme] = len(kept)
@@ -383,8 +410,13 @@ class ProjectChainTaskGenerator:
             source_ids[record.demand_id] = ("capability_voids", row_id)
         return source_ids
 
-    def _themes_to_ask(self, plan) -> list[tuple[str, str]]:
+    def _themes_to_ask(self, plan) -> list[tuple[str, str, tuple[str, ...]]]:
+        """(theme, kind, source_refs). The five fixed themes are the Host's to supply."""
+
         skipped: dict[str, str] = {}
+        planned_sources: dict[str, tuple[str, ...]] = {}
+        derived: list[tuple[str, tuple[str, ...]]] = []
+
         if plan is not None:
             for item in plan.skipped_fixed_themes:
                 theme = str(item.get("theme") or "").strip()
@@ -396,24 +428,67 @@ class ProjectChainTaskGenerator:
                     continue
                 if theme in FIXED_THEMES:
                     skipped[theme] = str(item.get("reason") or "")
+            for item in plan.themes:
+                theme = str(item.get("theme") or "").strip()
+                if not theme:
+                    continue
+                sources = tuple(
+                    str(value).strip() for value in item.get("source_refs") or () if str(value).strip()
+                )
+                if theme in FIXED_THEMES:
+                    planned_sources[theme] = sources
+                else:
+                    derived.append((theme, sources))
 
-        themes = [
-            (theme, THEME_KIND_FIXED) for theme in FIXED_THEMES if theme not in skipped
+        themes: list[tuple[str, str, tuple[str, ...]]] = [
+            (theme, THEME_KIND_FIXED, planned_sources.get(theme, ()))
+            for theme in FIXED_THEMES
+            if theme not in skipped
         ]
         for theme, reason in skipped.items():
             self.chain_trace.dropped_records[f"skip:{theme}"] = (
                 f"按模型说明跳过固定主题 {theme}：{reason}"
             )
 
-        seen = {theme for theme, _ in themes}
-        if plan is not None:
-            for item in plan.themes:
-                theme = str(item.get("theme") or "").strip()
-                if not theme or theme in seen:
-                    continue
-                seen.add(theme)
-                themes.append((theme, THEME_KIND_DERIVED))
+        seen = {theme for theme, _, _ in themes}
+        for theme, sources in derived:
+            if theme in seen:
+                continue
+            seen.add(theme)
+            themes.append((theme, THEME_KIND_DERIVED, sources))
+
+        for theme, _, sources in themes:
+            if not sources:
+                self.chain_trace.dropped_records[f"theme:{theme}"] = (
+                    "主题没有写来源（问题/价值/需求），它产出的任务缺少血缘，写不进任务库。"
+                )
         return themes
+
+    def _resolve_theme_source(
+        self, sources: tuple[str, ...]
+    ) -> tuple[str, str, str, int | None] | None:
+        """The first source of this theme that really exists.
+
+        Returns (source_kind, source_ref_id, source_level, store_id). A task inherits
+        this, because the task step itself never sees the three middle layers.
+        """
+
+        state = self.state
+        if state is None:
+            return None
+        levels = {
+            **{record.problem_id: ("problem", record.problem_level) for record in state.problems},
+            **{record.value_id: ("value", record.value_level) for record in state.values},
+            **{record.demand_id: ("demand", record.demand_level) for record in state.demands},
+        }
+        for source_ref_id in sources:
+            known = levels.get(source_ref_id)
+            if known is None:
+                continue
+            kind, level = known
+            store_entry = (state.source_ids or {}).get(source_ref_id)
+            return kind, source_ref_id, level, (store_entry[1] if store_entry else None)
+        return None
 
     def _accept_theme_candidates(
         self,
@@ -421,33 +496,23 @@ class ProjectChainTaskGenerator:
         *,
         theme: str,
         theme_kind: str,
+        sources: tuple[str, ...],
         reality_id: str,
-        source_ids: dict[str, tuple[str, int]],
-        problems,
-        values,
-        demands,
-        patterns: list[str],
     ) -> list[Any]:
-        levels = {
-            **{record.problem_id: ("problem", record.problem_level) for record in problems},
-            **{record.value_id: ("value", record.value_level) for record in values},
-            **{record.demand_id: ("demand", record.demand_level) for record in demands},
-        }
+        state = self.state
+        patterns = state.patterns if state is not None else []
+        lineage = self._resolve_theme_source(sources)
+        inherited = False
+        if lineage is None and self.theme_sources:
+            # A fixed theme the planner did not annotate still produced real work on
+            # this project's resources. Rather than let the task die at save time, it
+            # inherits this project's own source pool — and says that it did.
+            lineage = self._resolve_theme_source(self.theme_sources)
+            inherited = lineage is not None
         kept: list[Any] = []
 
-        for candidate, source_kind, source_ref_id in produced:
+        for candidate in produced:
             label = candidate.task_identity or candidate.candidate_id
-            known = levels.get(source_ref_id)
-            if not source_ref_id or known is None:
-                self.chain_trace.dropped_candidates[f"{theme}:{label}"] = (
-                    f"source_ref_id='{source_ref_id}' 不在本项目本轮的问题/价值/需求里，"
-                    "任务必须来自真实来源记录，已丢弃。"
-                )
-                continue
-            resolved_kind, source_level = known
-            if source_kind and source_kind != resolved_kind:
-                # The id is authoritative; a mislabelled kind is corrected, not fatal.
-                source_kind = resolved_kind
 
             hit = _matches_exclusion(
                 " ".join(
@@ -467,49 +532,67 @@ class ProjectChainTaskGenerator:
                 continue
 
             # The model named functions; map them to the capability ids the audit knows.
-            needed_functions = [
-                str(value).strip()
-                for value in (candidate.metadata or {}).get("needed_functions") or ()
-                if str(value).strip()
-            ]
             capability_ids: list[str] = []
-            for function_name in needed_functions:
+            for function_name in (candidate.metadata or {}).get("needed_functions") or ():
+                name = str(function_name).strip()
+                if not name:
+                    continue
                 capability_ids.extend(
-                    (self.state.capability_ids_by_function or {}).get(function_name, ())
-                    if self.state is not None
+                    (state.capability_ids_by_function or {}).get(name, ())
+                    if state is not None
                     else ()
                 )
 
-            classification = classify_task(
-                theme=theme,
-                theme_kind=theme_kind,
-                source_kind=resolved_kind,
-                source_level=source_level,
-            )
-            source_table = SOURCE_KIND_TO_TABLE[resolved_kind]
-            store_entry = source_ids.get(source_ref_id)
             metadata = dict(candidate.metadata)
             metadata.update(
                 {
                     "entity_id": self.project_id,
                     "theme": theme,
                     "theme_kind": theme_kind,
-                    "source_kind": resolved_kind,
-                    "source_ref_id": source_ref_id,
-                    "source_table": source_table,
-                    "source_level": source_level,
-                    **classification,
+                    "theme_source_refs": list(sources),
                 }
             )
-            if store_entry is not None:
-                metadata["source_id"] = store_entry[1]
+            if lineage is not None:
+                source_kind, source_ref_id, source_level, store_id = lineage
+                metadata.update(
+                    {
+                        "source_kind": source_kind,
+                        "source_ref_id": source_ref_id,
+                        "source_table": SOURCE_KIND_TO_TABLE[source_kind],
+                        "source_level": source_level,
+                        **classify_task(
+                            theme=theme,
+                            theme_kind=theme_kind,
+                            source_kind=source_kind,
+                            source_level=source_level,
+                        ),
+                    }
+                )
+                if store_id is not None:
+                    metadata["source_id"] = store_id
+                if inherited:
+                    metadata["lineage_inherited"] = True
+            else:
+                # No real source behind the theme: the task is still produced and
+                # audited, but it cannot be written to the task store, and the reason
+                # is recorded rather than quietly dropped.
+                metadata.update(
+                    classify_task(
+                        theme=theme,
+                        theme_kind=theme_kind,
+                        source_kind="problem",
+                        source_level="",
+                    )
+                )
+                metadata["lineage_missing"] = (
+                    "主题没有可用的问题/价值/需求来源，本项目也没有可继承的来源"
+                )
 
             kept.append(
                 replace(
                     candidate,
                     required_capability_ids=tuple(dict.fromkeys(capability_ids)),
-                    # A clerical copy error on reality_id must not cost a good task:
-                    # this project has exactly one reality and the Host knows which.
+                    # One project, one reality: a clerical copy error must not cost a task.
                     reality_id=reality_id,
                     metadata=metadata,
                 )
@@ -601,6 +684,9 @@ class ProjectChainTaskRegenerator:
                 await generator.ask_theme(
                     theme=_angle_theme(angle),
                     theme_kind=THEME_KIND_DERIVED,
+                    # A supplementary angle has no sources of its own; it inherits this
+                    # project's pool so its tasks keep the same lineage as round 0's.
+                    sources=generator.theme_sources,
                     instruction=_angle_instruction(angle),
                     extra_tasks=already_proposed,
                     stage=7,

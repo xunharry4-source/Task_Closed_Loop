@@ -1,16 +1,14 @@
-from .assignment import ResourceAssignment, resolve_resource_assignment
-from .config import (
-    ProjectConfigurationError,
-    ProjectInputBindings,
-    load_project_bindings,
+from .discovery import (
+    ProjectDiscoveryError,
+    ProjectSet,
+    discover_project_set,
 )
-from .grouping import ProjectScopeResolver
+from .grouping import ProjectScopeError, ProjectScopeResolver
 
 __all__ = [
-    "ProjectConfigurationError",
-    "ProjectInputBindings",
-    "load_project_bindings",
+    "ProjectDiscoveryError",
+    "ProjectSet",
+    "discover_project_set",
+    "ProjectScopeError",
     "ProjectScopeResolver",
-    "ResourceAssignment",
-    "resolve_resource_assignment",
 ]

@@ -110,7 +110,8 @@ class ProjectScope:
     # What the model is told about functions: the names, nothing else. Operation lists,
     # scopes, schemas and blurbs are left out on purpose — they would read as the
     # function's ceiling, and the model knows these tools better than our probe does.
-    capability_briefs: tuple[str, ...] = ()
+    # {"function": 名称, "identity": 谁开发的、什么类型的工具}
+    capability_briefs: tuple[dict[str, str], ...] = ()
     # function name -> capability ids, so the Host can translate what the model named
     capability_ids_by_function: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
@@ -156,10 +157,14 @@ class DemandRecord:
 
 @dataclass(frozen=True)
 class ThemePlan:
-    """What to ask this project about, plus the two context blocks the SKILL requires."""
+    """What to ask this project about, plus the resource context block.
+
+    There is deliberately no function-description block: functions travel as names, and
+    a written "what this function does" would both duplicate the model's own knowledge
+    and read as a ceiling on it.
+    """
 
     resource_info: str
-    capability_info: str
     themes: tuple[dict[str, str], ...] = ()          # {theme, theme_kind, reason}
     skipped_fixed_themes: tuple[dict[str, str], ...] = ()   # {theme, reason}
 

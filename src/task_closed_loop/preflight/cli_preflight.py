@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 from typing import Any, Iterable, Sequence
@@ -77,9 +78,10 @@ def _assert_no_inline_secret(value: Any, *, where: str) -> None:
 
 @dataclass(frozen=True)
 class LocalResourceInput:
+    """A configured working directory. The user writes the path, nothing else."""
+
     input_id: str
     directory: str
-    description: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_payload(self) -> dict[str, Any]:
@@ -87,18 +89,22 @@ class LocalResourceInput:
             "id": self.input_id,
             "kind": "local_directory",
             "directory": self.directory,
-            "description": self.description,
-            "metadata": dict(self.metadata),
         }
 
 
 @dataclass(frozen=True)
 class RemoteResourceInput:
+    """A remote scope reached through a function.
+
+    Kept as an internal section (the architecture lock names it) but no longer part of
+    what the user configures: a function is just a name, and whatever it exposes is
+    discovered by the analysis.
+    """
+
     input_id: str
-    kind: str
-    function_id: str
+    kind: str = ""
+    function_id: str = ""
     scope: dict[str, Any] = field(default_factory=dict)
-    description: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_payload(self) -> dict[str, Any]:
@@ -107,33 +113,22 @@ class RemoteResourceInput:
             "kind": self.kind,
             "function_id": self.function_id,
             "scope": dict(self.scope),
-            "description": self.description,
-            "metadata": dict(self.metadata),
         }
 
 
 @dataclass(frozen=True)
 class FunctionInput:
+    """A configured function. The user writes its name, nothing else.
+
+    No operations whitelist, no scope, no secret_refs, no kind: what the function is
+    and what it can do is not ours to declare. Credentials stay in `cli_project/.env`.
+    """
+
     function_id: str
-    kind: str
-    description: str = ""
-    secret_refs: tuple[str, ...] = ()
-    operations: tuple[str, ...] = ()
-    scope: dict[str, Any] = field(default_factory=dict)
-    config: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_payload(self) -> dict[str, Any]:
-        return {
-            "id": self.function_id,
-            "kind": self.kind,
-            "description": self.description,
-            "secret_refs": list(self.secret_refs),
-            "operations": list(self.operations),
-            "scope": dict(self.scope),
-            "config": dict(self.config),
-            "metadata": dict(self.metadata),
-        }
+        return {"id": self.function_id}
 
 
 @dataclass(frozen=True)
@@ -145,10 +140,6 @@ class PreflightInputBundle:
     @property
     def total_count(self) -> int:
         return len(self.local_resources) + len(self.remote_resources) + len(self.functions)
-
-    @property
-    def secret_refs(self) -> tuple[str, ...]:
-        return tuple(sorted({ref for item in self.functions for ref in item.secret_refs}))
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -251,38 +242,76 @@ def _cli_progress_reporter(label: str):
     return report
 
 
-def _required_description(raw: dict, *, section: str, item_id: str) -> str:
-    """Stage 2 needs one human sentence saying what this input is.
+def resource_id_for_directory(directory: Path, *, taken: set[str]) -> str:
+    """A stable id derived from the path: the directory name, parent-qualified on clash.
 
-    The user writes it. Without it the CLI can only guess from an id or a directory
-    name, and a wrong guess sends the whole analysis in the wrong direction. It is a
-    one-line statement of *what this is* — never a description of what is inside it,
-    which is exactly what Stage 2 must go and find out.
+    It has to be stable across runs (references are written `resource:<id>`, and the
+    task store keys history by it), so it is derived from the path alone — never from
+    anything a model wrote.
     """
 
-    text = str(raw.get("description") or "").strip()
-    if not text:
-        raise PreflightSourceConfigurationError(
-            f"{section} '{item_id}' 缺少 description。请用一句话说明它是什么"
-            "（例如它属于什么业务、什么系统、什么用途）；不要写里面有哪些内容、"
-            "哪些字段、哪些操作——那些由 Stage 2 分析后给出。"
-        )
-    return text
+    def normalize(text: str) -> str:
+        cleaned = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]+", "_", str(text)).strip("_")
+        return cleaned or "resource"
+
+    name = normalize(directory.name)
+    if name not in taken:
+        return name
+    parent = normalize(directory.parent.name)
+    qualified = f"{parent}_{name}" if parent else name
+    if qualified not in taken:
+        return qualified
+    index = 2
+    while f"{qualified}_{index}" in taken:
+        index += 1
+    return f"{qualified}_{index}"
 
 
-def _unique_id(raw: dict, *, section: str, index: int, key: str = "id") -> str:
-    value = str(raw.get(key) or "").strip()
-    if not value:
-        raise PreflightSourceConfigurationError(f"{section}[{index}] 缺少 {key}。")
-    return value
+_AVAILABILITY = ("available", "unavailable", "failed")
+
+ANALYZE_AUTO = "auto"
+ANALYZE_ALWAYS = "always"
+ANALYZE_NEVER = "never"
+
+
+def analysis_mode(config: dict) -> str:
+    """Step 2 initializes the data; it does not have to run every time.
+
+    - `auto` (default): run only when the saved templates are missing or empty.
+    - `always` / true: re-initialize this run.
+    - `never` / false: never run; use what is saved (error if nothing is saved).
+    """
+
+    section = (config or {}).get("preflight_inputs") or {}
+    raw = section.get("analyze", ANALYZE_AUTO)
+    if isinstance(raw, bool):
+        return ANALYZE_ALWAYS if raw else ANALYZE_NEVER
+    name = str(raw or "").strip().lower()
+    if name in {ANALYZE_ALWAYS, "true", "yes", "on", "refresh"}:
+        return ANALYZE_ALWAYS
+    if name in {ANALYZE_NEVER, "false", "no", "off", "skip"}:
+        return ANALYZE_NEVER
+    return ANALYZE_AUTO
 
 
 def load_preflight_inputs(config: dict, *, project_root: str | Path) -> PreflightInputBundle:
-    """Load the only Stage 2 input shape allowed by the architecture lock."""
+    """Load the first step's configuration: directories, functions, CLI.
+
+    Accepted shape:
+
+        preflight_inputs:
+          cli: codex
+          directories: [/path/one, /path/two]
+          functions: [codex, gmail]
+
+    Ids are derived from the paths and the function names, so there is nothing else to
+    fill in. The older per-item mapping form (`local_resources: [{id, directory}]`,
+    `functions: [{id: ...}]`) is still accepted so existing configs keep working.
+    """
 
     if "preflight_sources" in (config or {}):
         raise PreflightSourceConfigurationError(
-            "已废弃 preflight_sources.sources 单列表。V1.1 固定使用 preflight_inputs.local_resources / remote_resources / functions。"
+            "已废弃 preflight_sources.sources 单列表。请使用 preflight_inputs 的 directories / functions / cli。"
         )
 
     section = (config or {}).get("preflight_inputs") or {}
@@ -290,107 +319,80 @@ def load_preflight_inputs(config: dict, *, project_root: str | Path) -> Prefligh
         return PreflightInputBundle()
 
     root = Path(project_root).resolve()
-    local_raw = section.get("local_resources") or []
+    directories_raw = section.get("directories")
+    if directories_raw is None:
+        directories_raw = section.get("local_resources") or []
+    functions_raw = section.get("functions") or []
     remote_raw = section.get("remote_resources") or []
-    function_raw = section.get("functions") or []
     for name, values in (
-        ("local_resources", local_raw),
+        ("directories", directories_raw),
+        ("functions", functions_raw),
         ("remote_resources", remote_raw),
-        ("functions", function_raw),
     ):
         if not isinstance(values, list):
             raise PreflightSourceConfigurationError(f"preflight_inputs.{name} 必须是列表。")
 
     local: list[LocalResourceInput] = []
-    remote: list[RemoteResourceInput] = []
-    functions: list[FunctionInput] = []
-    seen: set[str] = set()
-
-    for index, item in enumerate(local_raw, start=1):
-        if not isinstance(item, dict):
-            raise PreflightSourceConfigurationError(f"local_resources[{index}] 必须是映射。")
-        _assert_no_inline_secret(item, where=f"local_resources[{index}]")
-        input_id = _unique_id(item, section="local_resources", index=index)
-        if input_id in seen:
-            raise PreflightSourceConfigurationError(f"Stage 2 输入 id 重复：{input_id}")
-        seen.add(input_id)
-        directory = str(item.get("directory") or "").strip()
+    taken: set[str] = set()
+    for index, item in enumerate(directories_raw, start=1):
+        if isinstance(item, dict):
+            _assert_no_inline_secret(item, where=f"directories[{index}]")
+            directory = str(item.get("directory") or item.get("path") or "").strip()
+            explicit_id = str(item.get("id") or "").strip()
+        else:
+            directory = str(item or "").strip()
+            explicit_id = ""
         if not directory:
-            raise PreflightSourceConfigurationError(f"local resource '{input_id}' 缺少 directory。")
-        path = Path(directory)
-        resolved = path if path.is_absolute() else (root / path)
-        resolved = resolved.resolve()
+            raise PreflightSourceConfigurationError(f"directories[{index}] 没有写路径。")
+        path = Path(directory).expanduser()
+        resolved = (path if path.is_absolute() else (root / path)).resolve()
         if not resolved.is_dir():
             raise PreflightSourceConfigurationError(
-                f"local resource '{input_id}' 配置目录不存在或不是目录：{resolved}"
+                f"配置的工作目录不存在或不是目录：{resolved}"
             )
-        local.append(
-            LocalResourceInput(
-                input_id=input_id,
-                directory=str(resolved),
-                description=_required_description(
-                    item, section="local_resources", item_id=input_id
-                ),
-                metadata=dict(item.get("metadata") or {}),
-            )
-        )
+        input_id = explicit_id or resource_id_for_directory(resolved, taken=taken)
+        if input_id in taken:
+            raise PreflightSourceConfigurationError(f"Stage 2 输入 id 重复：{input_id}")
+        taken.add(input_id)
+        local.append(LocalResourceInput(input_id=input_id, directory=str(resolved)))
 
-    function_ids: set[str] = set()
-    for index, item in enumerate(function_raw, start=1):
-        if not isinstance(item, dict):
-            raise PreflightSourceConfigurationError(f"functions[{index}] 必须是映射。")
-        _assert_no_inline_secret(item, where=f"functions[{index}]")
-        function_id = _unique_id(item, section="functions", index=index)
-        if function_id in seen:
+    functions: list[FunctionInput] = []
+    for index, item in enumerate(functions_raw, start=1):
+        if isinstance(item, dict):
+            _assert_no_inline_secret(item, where=f"functions[{index}]")
+            function_id = str(item.get("id") or item.get("name") or "").strip()
+        else:
+            function_id = str(item or "").strip()
+        if not function_id:
+            raise PreflightSourceConfigurationError(f"functions[{index}] 没有写功能名。")
+        if function_id in taken:
             raise PreflightSourceConfigurationError(f"Stage 2 输入 id 重复：{function_id}")
-        seen.add(function_id)
-        function_ids.add(function_id)
-        kind = str(item.get("kind") or "").strip()
-        if not kind:
-            raise PreflightSourceConfigurationError(f"function '{function_id}' 缺少 kind。")
-        functions.append(
-            FunctionInput(
-                function_id=function_id,
-                kind=kind,
-                description=_required_description(
-                    item, section="functions", item_id=function_id
-                ),
-                secret_refs=tuple(str(v).strip() for v in (item.get("secret_refs") or []) if str(v).strip()),
-                operations=tuple(str(v).strip() for v in (item.get("operations") or []) if str(v).strip()),
-                scope=dict(item.get("scope") or {}),
-                config=dict(item.get("config") or {}),
-                metadata=dict(item.get("metadata") or {}),
-            )
-        )
+        taken.add(function_id)
+        functions.append(FunctionInput(function_id=function_id))
 
+    function_ids = {item.function_id for item in functions}
+    remote: list[RemoteResourceInput] = []
     for index, item in enumerate(remote_raw, start=1):
         if not isinstance(item, dict):
             raise PreflightSourceConfigurationError(f"remote_resources[{index}] 必须是映射。")
         _assert_no_inline_secret(item, where=f"remote_resources[{index}]")
-        input_id = _unique_id(item, section="remote_resources", index=index)
-        if input_id in seen:
-            raise PreflightSourceConfigurationError(f"Stage 2 输入 id 重复：{input_id}")
-        seen.add(input_id)
-        kind = str(item.get("kind") or "").strip()
+        input_id = str(item.get("id") or "").strip()
         function_id = str(item.get("function_id") or "").strip()
-        if not kind or not function_id:
+        if not input_id:
+            raise PreflightSourceConfigurationError(f"remote_resources[{index}] 缺少 id。")
+        if function_id and function_id not in function_ids:
             raise PreflightSourceConfigurationError(
-                f"remote resource '{input_id}' 必须同时声明 kind 与 function_id。"
+                f"remote resource '{input_id}' 引用未配置的功能：{function_id}"
             )
-        if function_id not in function_ids:
-            raise PreflightSourceConfigurationError(
-                f"remote resource '{input_id}' 引用未配置 function_id：{function_id}"
-            )
+        if input_id in taken:
+            raise PreflightSourceConfigurationError(f"Stage 2 输入 id 重复：{input_id}")
+        taken.add(input_id)
         remote.append(
             RemoteResourceInput(
                 input_id=input_id,
-                kind=kind,
+                kind=str(item.get("kind") or "").strip(),
                 function_id=function_id,
                 scope=dict(item.get("scope") or {}),
-                description=_required_description(
-                    item, section="remote_resources", item_id=input_id
-                ),
-                metadata=dict(item.get("metadata") or {}),
             )
         )
 
@@ -484,12 +486,20 @@ class CliPreflightEngine:
         return self.analysis_dir / ANALYSIS_ENTRYPOINT
 
     @property
+    def receipt_path(self) -> Path:
+        """One Host-written receipt replaces the two CLI-authored analysis files."""
+
+        return self.analysis_dir / "results" / "stage2.analysis.yml"
+
+    # The contract DTO still carries two analysis paths; both name the receipt, so
+    # `contracts/` and `pipeline/production.py` stay untouched.
+    @property
     def resource_analysis_path(self) -> Path:
-        return self.analysis_dir / "results" / "resources.analysis.yml"
+        return self.receipt_path
 
     @property
     def function_analysis_path(self) -> Path:
-        return self.analysis_dir / "results" / "functions.analysis.yml"
+        return self.receipt_path
 
     def has_analysis_code(self) -> bool:
         return self.entrypoint.is_file()
@@ -647,341 +657,156 @@ class CliPreflightEngine:
                 "files": files,
             },
         }
+    def _validate_unit_output(self, raw: Any, inputs: PreflightInputBundle) -> None:
+        """One template, four checks.
 
-    def _validated_generated_evidence(
-        self, evidence: Any, *, source_type: str, source_id: str, allowed_operations: set[str] | None = None
-    ) -> list[dict[str, Any]]:
-        if not isinstance(evidence, list) or not evidence:
-            raise PreflightAnalysisError(
-                f"Stage 2 {source_type} '{source_id}' 缺少结构化 evidence；CLI 的文字结论不能直接成为现实事实。"
-            )
-        valid_status = {"success", "verified_empty", "unavailable", "failed"}
-        out: list[dict[str, Any]] = []
-        seen: set[str] = set()
-        artifact_root = (self.project_root / "artifacts" / "preflight").resolve()
-        for index, raw in enumerate(evidence, start=1):
-            if not isinstance(raw, dict):
-                raise PreflightAnalysisError(
-                    f"Stage 2 {source_type} '{source_id}' evidence[{index}] 必须是映射，不接受字符串自报证据。"
-                )
-            evidence_id = str(raw.get("evidence_id") or "").strip()
-            status = str(raw.get("status") or "").strip().lower()
-            operation = str(raw.get("operation") or "").strip()
-            observed_via = str(raw.get("observed_via") or "").strip()
-            if not evidence_id or evidence_id in seen:
-                raise PreflightAnalysisError(
-                    f"Stage 2 {source_type} '{source_id}' evidence 必须有唯一 evidence_id。"
-                )
-            seen.add(evidence_id)
-            if status not in valid_status:
-                raise PreflightAnalysisError(
-                    f"Stage 2 evidence '{evidence_id}' status 必须是 {sorted(valid_status)}。"
-                )
-            if not operation or not observed_via:
-                raise PreflightAnalysisError(
-                    f"Stage 2 evidence '{evidence_id}' 缺少 operation/observed_via。"
-                )
-            if allowed_operations and operation not in allowed_operations:
-                raise PreflightAnalysisError(
-                    f"Stage 2 evidence '{evidence_id}' operation={operation} 不在配置允许操作 {sorted(allowed_operations)} 中。"
-                )
-            if str(raw.get("source_id") or "").strip() != source_id:
-                raise PreflightAnalysisError(
-                    f"Stage 2 evidence '{evidence_id}' source_id 必须等于 {source_id}。"
-                )
-            if str(raw.get("source_type") or "").strip() != source_type:
-                raise PreflightAnalysisError(
-                    f"Stage 2 evidence '{evidence_id}' source_type 必须等于 {source_type}。"
-                )
-            has_inline = "raw_observation" in raw
-            artifact_ref = str(raw.get("artifact_ref") or "").strip()
-            if not has_inline and not artifact_ref:
-                raise PreflightAnalysisError(
-                    f"Stage 2 evidence '{evidence_id}' 必须包含 raw_observation 或 artifact_ref，不能只有结论。"
-                )
-            normalized = dict(raw)
-            if artifact_ref:
-                candidate = Path(artifact_ref)
-                resolved = candidate.resolve() if candidate.is_absolute() else (self.project_root / candidate).resolve()
-                try:
-                    resolved.relative_to(artifact_root)
-                except ValueError as exc:
-                    raise PreflightAnalysisError(
-                        f"Stage 2 evidence '{evidence_id}' artifact_ref 必须位于 cli_project/artifacts/preflight/。"
-                    ) from exc
-                if not resolved.is_file():
-                    raise PreflightAnalysisError(
-                        f"Stage 2 evidence '{evidence_id}' artifact_ref 不存在：{resolved}"
-                    )
-                normalized["artifact_ref"] = resolved.relative_to(self.project_root).as_posix()
-                normalized["artifact_sha256"] = hashlib.sha256(resolved.read_bytes()).hexdigest()
-            if has_inline:
-                serialized = json.dumps(raw.get("raw_observation"), ensure_ascii=False, sort_keys=True, default=str)
-                normalized["observation_sha256"] = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
-            out.append(normalized)
-        return out
+        Coverage, explicit availability, real lineage ids, and a `summary` on every
+        resource. Everything the old two-template gate demanded on top of that
+        (structured evidence, implementation_files, an operations whitelist,
+        per-operation capabilities, and a consistency cross-check between two
+        CLI-authored shapes) is gone: none of it had a downstream consumer, and the
+        cross-check turned a successful probe into a failed unit.
+        """
 
-    def _validate_implementation_files(self, values: Any, *, source_label: str) -> list[str]:
-        if not isinstance(values, list) or not values:
-            raise PreflightAnalysisError(
-                f"Stage 2 {source_label} 缺少 implementation_files；必须证明实际调用/分析代码已落在 cli_project。"
-            )
-        normalized: list[str] = []
-        for raw in values:
-            rel = str(raw or "").strip()
-            if not rel:
-                raise PreflightAnalysisError(f"Stage 2 {source_label} implementation_files 含空路径。")
-            candidate = (self.project_root / rel).resolve()
-            try:
-                candidate.relative_to(self.project_root)
-            except ValueError as exc:
-                raise PreflightAnalysisError(
-                    f"Stage 2 {source_label} implementation file 越出 cli_project：{rel}"
-                ) from exc
-            if not candidate.is_file():
-                raise PreflightAnalysisError(
-                    f"Stage 2 {source_label} 声明的 implementation file 不存在：{rel}"
-                )
-            normalized.append(candidate.relative_to(self.project_root).as_posix())
-        return normalized
+        if not isinstance(raw, dict):
+            raise PreflightAnalysisError("Stage 2 返回必须是 object。")
 
-    def _validate_analysis_coverage(self, raw: dict[str, Any], inputs: PreflightInputBundle) -> dict[str, dict[str, Any]]:
-        resource_analysis = raw.get("resource_analysis")
-        function_analysis = raw.get("function_analysis")
-        if not isinstance(resource_analysis, list):
-            raise PreflightAnalysisError("Stage 2 结果缺少 resource_analysis 列表。")
-        if not isinstance(function_analysis, list):
-            raise PreflightAnalysisError("Stage 2 结果缺少 function_analysis 列表。")
+        resources = raw.get("resources") or []
+        capabilities = raw.get("capabilities") or []
+        if not isinstance(resources, list) or not isinstance(capabilities, list):
+            raise PreflightAnalysisError("Stage 2 的 resources / capabilities 必须是列表。")
 
-        local_by_id = {item.input_id: item for item in inputs.local_resources}
-        remote_by_id = {item.input_id: item for item in inputs.remote_resources}
-        expected_resources = set(local_by_id) | set(remote_by_id)
-        observed_resource_ids = [
-            str(item.get("input_id") or "").strip()
-            for item in resource_analysis if isinstance(item, dict)
-        ]
-        duplicates = sorted({value for value in observed_resource_ids if value and observed_resource_ids.count(value) > 1})
-        if duplicates:
-            raise PreflightAnalysisError(
-                "Stage 2 resource_analysis input_id 必须唯一；重复：" + ", ".join(duplicates)
-            )
-        observed_resources = set(observed_resource_ids)
-        missing_resources = sorted(expected_resources - observed_resources)
-        if missing_resources:
-            raise PreflightAnalysisError(
-                "Stage 2 没有为以下资源输入生成分析文件记录：" + ", ".join(missing_resources)
-            )
-
-        evidence_index: dict[str, dict[str, Any]] = {}
-        for item in resource_analysis:
-            if not isinstance(item, dict):
-                raise PreflightAnalysisError("resource_analysis 元素必须是映射。")
-            input_id = str(item.get("input_id") or "").strip()
-            for field_name in ("input_id", "directory_structure", "data_summary", "content_summary", "availability_status"):
-                if field_name not in item:
-                    raise PreflightAnalysisError(
-                        f"resource_analysis[{input_id or '?'}] 缺少 {field_name}。"
-                    )
-            status = str(item.get("availability_status") or "").strip().lower()
-            if status not in {"available", "unavailable", "failed"}:
-                raise PreflightAnalysisError(
-                    f"resource_analysis[{input_id}] availability_status 必须显式为 available/unavailable/failed。"
-                )
-            self._validate_implementation_files(
-                item.get("implementation_files"), source_label=f"resource_analysis[{input_id}]"
-            )
-            if input_id in local_by_id:
-                host_evidence = self._local_tree_receipt(local_by_id[input_id])
-                existing = item.get("evidence")
-                if existing is None:
-                    existing = []
-                if not isinstance(existing, list):
-                    raise PreflightAnalysisError(f"resource_analysis[{input_id}].evidence 必须是列表。")
-                # Local truth is independently verified by Host, not trusted from CLI text.
-                normalized_evidence = [host_evidence]
-                item["evidence"] = normalized_evidence
-                if status != "available":
-                    raise PreflightAnalysisError(
-                        f"本地目录 '{input_id}' 已由 Host 验证存在并扫描成功，CLI 不得标记为 {status}。"
-                    )
-            elif input_id in remote_by_id:
-                allowed = None
-                function = next((f for f in inputs.functions if f.function_id == remote_by_id[input_id].function_id), None)
-                if function is not None and function.operations:
-                    allowed = set(function.operations)
-                normalized_evidence = self._validated_generated_evidence(
-                    item.get("evidence"), source_type="remote_resource", source_id=input_id, allowed_operations=allowed
-                )
-                item["evidence"] = normalized_evidence
-            else:
-                raise PreflightAnalysisError(f"Stage 2 返回未配置的 resource_analysis input_id：{input_id}")
-            for ev in item["evidence"]:
-                if ev["evidence_id"] in evidence_index:
-                    raise PreflightAnalysisError(f"Stage 2 evidence_id 重复：{ev['evidence_id']}")
-                evidence_index[ev["evidence_id"]] = ev
-
-        function_by_id = {item.function_id: item for item in inputs.functions}
-        expected_functions = set(function_by_id)
-        observed_function_ids = [
-            str(item.get("function_id") or "").strip()
-            for item in function_analysis if isinstance(item, dict)
-        ]
-        duplicates = sorted({value for value in observed_function_ids if value and observed_function_ids.count(value) > 1})
-        if duplicates:
-            raise PreflightAnalysisError(
-                "Stage 2 function_analysis function_id 必须唯一；重复：" + ", ".join(duplicates)
-            )
-        observed_functions = set(observed_function_ids)
-        missing_functions = sorted(expected_functions - observed_functions)
-        if missing_functions:
-            raise PreflightAnalysisError(
-                "Stage 2 没有为以下功能配置生成分析文件记录：" + ", ".join(missing_functions)
-            )
-        for item in function_analysis:
-            if not isinstance(item, dict):
-                raise PreflightAnalysisError("function_analysis 元素必须是映射。")
-            function_id = str(item.get("function_id") or "").strip()
-            if function_id not in function_by_id:
-                raise PreflightAnalysisError(f"Stage 2 返回未配置的 function_id：{function_id}")
-            for field_name in ("function_id", "available_operations", "observed_data_summary", "availability_status"):
-                if field_name not in item:
-                    raise PreflightAnalysisError(
-                        f"function_analysis[{function_id or '?'}] 缺少 {field_name}。"
-                    )
-            status = str(item.get("availability_status") or "").strip().lower()
-            if status not in {"available", "unavailable", "failed"}:
-                raise PreflightAnalysisError(
-                    f"function_analysis[{function_id}] availability_status 必须显式为 available/unavailable/failed。"
-                )
-            self._validate_implementation_files(
-                item.get("implementation_files"), source_label=f"function_analysis[{function_id}]"
-            )
-            configured_ops = set(function_by_id[function_id].operations)
-            reported_ops = {str(value).strip() for value in (item.get("available_operations") or []) if str(value).strip()}
-            if configured_ops and not reported_ops.issubset(configured_ops):
-                raise PreflightAnalysisError(
-                    f"function_analysis[{function_id}] 报告了配置之外的操作：{sorted(reported_ops - configured_ops)}"
-                )
-            if status == "available" and not reported_ops:
-                raise PreflightAnalysisError(
-                    f"function_analysis[{function_id}] 标记 available 但没有任何实测 available_operations。"
-                )
-            normalized_evidence = self._validated_generated_evidence(
-                item.get("evidence"), source_type="function", source_id=function_id,
-                allowed_operations=(configured_ops or None),
-            )
-            item["evidence"] = normalized_evidence
-            if status == "available" and not any(ev["status"] in {"success", "verified_empty"} for ev in normalized_evidence):
-                raise PreflightAnalysisError(
-                    f"function_analysis[{function_id}] 标记 available，但没有 success/verified_empty 执行证据。"
-                )
-            for ev in normalized_evidence:
-                if ev["evidence_id"] in evidence_index:
-                    raise PreflightAnalysisError(f"Stage 2 evidence_id 重复：{ev['evidence_id']}")
-                evidence_index[ev["evidence_id"]] = ev
-        return evidence_index
-
-    def _bind_output_provenance(
-        self, raw: dict[str, Any], inputs: PreflightInputBundle, evidence_index: dict[str, dict[str, Any]]
-    ) -> None:
-        configured_resource_ids = {item.input_id for item in inputs.local_resources + inputs.remote_resources}
+        configured_resource_ids = {item.input_id for item in inputs.local_resources} | {
+            item.input_id for item in inputs.remote_resources
+        }
         configured_function_ids = {item.function_id for item in inputs.functions}
-        resource_status = {
-            str(item.get("input_id") or "").strip(): str(item.get("availability_status") or "").strip().lower()
-            for item in (raw.get("resource_analysis") or []) if isinstance(item, dict)
-        }
-        function_status = {
-            str(item.get("function_id") or "").strip(): str(item.get("availability_status") or "").strip().lower()
-            for item in (raw.get("function_analysis") or []) if isinstance(item, dict)
-        }
-        evidence_by_source: dict[str, list[str]] = {}
-        for evidence_id, evidence in evidence_index.items():
-            evidence_by_source.setdefault(str(evidence.get("source_id") or ""), []).append(evidence_id)
 
-        for index, item in enumerate(raw.get("resources") or [], start=1):
+        covered_inputs: set[str] = set()
+        for index, item in enumerate(resources, start=1):
             if not isinstance(item, dict):
                 raise PreflightAnalysisError(f"Stage 2 resources[{index}] 必须是映射。")
-            if "availability" not in item:
-                raise PreflightAnalysisError(f"Stage 2 resources[{index}] 必须显式声明 availability。")
-            metadata = dict(item.get("metadata") or {})
-            source_ids = metadata.get("source_input_ids") or []
-            if not isinstance(source_ids, list) or not source_ids:
+            resource_id = str(item.get("id") or "").strip()
+            if not resource_id:
+                raise PreflightAnalysisError(f"Stage 2 resources[{index}] 缺少 id。")
+            if not str(item.get("summary") or "").strip():
                 raise PreflightAnalysisError(
-                    f"Stage 2 resource '{item.get('id', index)}' metadata.source_input_ids 必须关联实际配置资源。"
+                    f"Stage 2 resource '{resource_id}' 缺少 summary："
+                    "用一句话说明这是什么、现在有什么、到什么程度。"
                 )
-            normalized_sources = [str(value).strip() for value in source_ids if str(value).strip()]
-            unknown = sorted(set(normalized_sources) - configured_resource_ids)
+            self._require_availability(
+                item.get("availability"), label=f"resource '{resource_id}'"
+            )
+            sources = (item.get("metadata") or {}).get("source_input_ids")
+            if not isinstance(sources, list) or not sources:
+                raise PreflightAnalysisError(
+                    f"Stage 2 resource '{resource_id}' 缺少 metadata.source_input_ids。"
+                )
+            normalized = {str(value).strip() for value in sources if str(value).strip()}
+            unknown = sorted(normalized - configured_resource_ids)
             if unknown:
                 raise PreflightAnalysisError(
-                    f"Stage 2 resource '{item.get('id', index)}' 引用了未知 source_input_ids：{unknown}"
+                    f"Stage 2 resource '{resource_id}' 引用了未配置的来源：{unknown}"
                 )
-            evidence_ids = sorted({eid for sid in normalized_sources for eid in evidence_by_source.get(sid, [])})
-            if not evidence_ids:
-                raise PreflightAnalysisError(
-                    f"Stage 2 resource '{item.get('id', index)}' 没有可追溯 Stage 2 evidence。"
-                )
-            declared_availability = str(item.get("availability") or "").strip().lower()
-            if declared_availability not in {"available", "unavailable", "failed"}:
-                raise PreflightAnalysisError(
-                    f"Stage 2 resource '{item.get('id', index)}' availability 必须是 available/unavailable/failed。"
-                )
-            source_states = {resource_status.get(source_id, "") for source_id in normalized_sources}
-            expected_availability = (
-                "available" if "available" in source_states
-                else "failed" if "failed" in source_states
-                else "unavailable"
-            )
-            if declared_availability != expected_availability:
-                raise PreflightAnalysisError(
-                    f"Stage 2 resource '{item.get('id', index)}' availability={declared_availability} "
-                    f"与来源分析状态 {sorted(source_states)} 不一致；应为 {expected_availability}。"
-                )
-            metadata["source_input_ids"] = normalized_sources
-            metadata["stage2_evidence_ids"] = evidence_ids
-            item["metadata"] = metadata
+            covered_inputs |= normalized
 
-        for index, item in enumerate(raw.get("capabilities") or [], start=1):
+        covered_functions: set[str] = set()
+        for index, item in enumerate(capabilities, start=1):
             if not isinstance(item, dict):
                 raise PreflightAnalysisError(f"Stage 2 capabilities[{index}] 必须是映射。")
-            if "availability" not in item:
-                raise PreflightAnalysisError(f"Stage 2 capabilities[{index}] 必须显式声明 availability。")
-            metadata = dict(item.get("metadata") or {})
-            function_id = str(metadata.get("source_function_id") or "").strip()
-            if not function_id or function_id not in configured_function_ids:
+            capability_id = str(item.get("id") or "").strip()
+            if not capability_id:
+                raise PreflightAnalysisError(f"Stage 2 capabilities[{index}] 缺少 id。")
+            self._require_availability(
+                item.get("availability"), label=f"capability '{capability_id}'"
+            )
+            function_id = str(
+                (item.get("metadata") or {}).get("source_function_id") or ""
+            ).strip()
+            if not function_id:
                 raise PreflightAnalysisError(
-                    f"Stage 2 capability '{item.get('id', index)}' metadata.source_function_id 必须关联已配置 function。"
+                    f"Stage 2 capability '{capability_id}' 缺少 metadata.source_function_id。"
                 )
-            evidence_ids = sorted(evidence_by_source.get(function_id, []))
-            if not evidence_ids:
+            if function_id not in configured_function_ids:
                 raise PreflightAnalysisError(
-                    f"Stage 2 capability '{item.get('id', index)}' 没有可追溯 Stage 2 evidence。"
+                    f"Stage 2 capability '{capability_id}' 引用了未配置的功能：{function_id}"
                 )
-            declared_availability = str(item.get("availability") or "").strip().lower()
-            if declared_availability not in {"available", "unavailable", "failed"}:
-                raise PreflightAnalysisError(
-                    f"Stage 2 capability '{item.get('id', index)}' availability 必须是 available/unavailable/failed。"
-                )
-            expected_availability = function_status.get(function_id, "")
-            if declared_availability != expected_availability:
-                raise PreflightAnalysisError(
-                    f"Stage 2 capability '{item.get('id', index)}' availability={declared_availability} "
-                    f"与 function '{function_id}' 分析状态 {expected_availability} 不一致。"
-                )
-            metadata["source_function_id"] = function_id
-            metadata["stage2_evidence_ids"] = evidence_ids
-            item["metadata"] = metadata
+            covered_functions.add(function_id)
+
+        missing_inputs = sorted(configured_resource_ids - covered_inputs)
+        if missing_inputs:
+            raise PreflightAnalysisError(
+                f"Stage 2 没有覆盖这些已配置的工作目录：{missing_inputs}"
+            )
+        missing_functions = sorted(configured_function_ids - covered_functions)
+        if missing_functions:
+            raise PreflightAnalysisError(
+                f"Stage 2 没有覆盖这些已配置的功能：{missing_functions}"
+            )
 
     @staticmethod
-    def _write_analysis_file(path: Path, producer: str, items: list[Any]) -> None:
+    def _require_availability(value: Any, *, label: str) -> str:
+        availability = str(value or "").strip()
+        if availability not in _AVAILABILITY:
+            raise PreflightAnalysisError(
+                f"Stage 2 {label} 的 availability 必须显式写成 "
+                f"{' / '.join(_AVAILABILITY)}，当前是 {availability or '（空）'}。"
+            )
+        return availability
+
+    def _write_receipt(
+        self,
+        *,
+        units: list[tuple[str, PreflightInputBundle]],
+        resources: list[dict[str, Any]],
+        capabilities: list[dict[str, Any]],
+        failures: list[tuple[str, str]],
+        engine: str,
+    ) -> Path:
+        """What this run received — written by the Host, not by the CLI.
+
+        This replaces the two CLI-authored analysis files: a receipt has no template to
+        fill in wrong and nothing to cross-check against.
+        """
+
+        by_input: dict[str, dict[str, Any]] = {}
+        for item in resources:
+            for source in (item.get("metadata") or {}).get("source_input_ids") or []:
+                entry = by_input.setdefault(
+                    str(source), {"resources": [], "capabilities": []}
+                )
+                entry["resources"].append(str(item.get("id") or ""))
+                entry["availability"] = str(item.get("availability") or "")
+                entry["summary"] = str(item.get("summary") or "")
+        for item in capabilities:
+            function_id = str((item.get("metadata") or {}).get("source_function_id") or "")
+            entry = by_input.setdefault(function_id, {"resources": [], "capabilities": []})
+            entry["capabilities"].append(str(item.get("id") or ""))
+            entry["availability"] = str(item.get("availability") or "")
+
+        local_scans = {
+            resource.input_id: self._local_tree_receipt(resource)
+            for _, unit in units
+            for resource in unit.local_resources
+        }
+
+        path = self.receipt_path
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             yaml.safe_dump(
-                {"schema_version": "1.1", "producer": producer, "items": items},
+                {
+                    "schema_version": "2.0",
+                    "producer": "preflight.stage2_receipt",
+                    "engine": engine,
+                    "inputs": by_input,
+                    "host_local_scan": local_scans,
+                    "failures": {label: message for label, message in failures},
+                },
                 allow_unicode=True,
                 sort_keys=False,
             ),
             encoding="utf-8",
         )
+        return path
 
     @staticmethod
     def _split_units(
@@ -1040,39 +865,29 @@ class CliPreflightEngine:
         """Record a failed unit so a configured input is never silently missing."""
 
         if unit.functions:
+            function_id = unit.functions[0].function_id
             return (
-                "function_analysis",
+                "capabilities",
                 {
-                    "function_id": unit.functions[0].function_id,
-                    "availability_status": "failed",
-                    "implementation_files": [],
-                    "available_operations": [],
-                    "observed_data_summary": {},
-                    "can_observe_state": False,
-                    "observable_state": None,
-                    "target_scope": {},
-                    "evidence": [],
-                    "host_error": message,
+                    "id": function_id,
+                    "availability": "failed",
+                    "metadata": {"source_function_id": function_id, "host_error": message},
                 },
             )
         if unit.local_resources or unit.remote_resources:
             source = (unit.local_resources or unit.remote_resources)[0]
             return (
-                "resource_analysis",
+                "resources",
                 {
-                    "input_id": source.input_id,
-                    "availability_status": "failed",
-                    "implementation_files": [],
-                    "directory_structure": {},
-                    "data_summary": {},
-                    "content_summary": {},
-                    "evidence": [],
-                    "host_error": message,
+                    "id": source.input_id,
+                    "type": "local_directory" if unit.local_resources else "remote_scope",
+                    "summary": f"本轮分析失败，内容未知：{message}",
+                    "availability": "failed",
+                    "payload": {},
+                    "metadata": {"source_input_ids": [source.input_id], "host_error": message},
                 },
             )
-        return ("resource_analysis", None)
-
-    # -- incremental build state ------------------------------------------------
+        return ("resources", None)
 
     @property
     def _build_state_path(self) -> Path:
@@ -1136,24 +951,147 @@ class CliPreflightEngine:
                 return False
         return True
 
-    @staticmethod
-    def _declared_implementation_files(raw: dict[str, Any]) -> list[str]:
-        files: list[str] = []
-        for key in ("resource_analysis", "function_analysis"):
-            for item in raw.get(key) or []:
-                if not isinstance(item, dict):
-                    continue
-                for value in item.get("implementation_files") or []:
-                    text = str(value).strip()
-                    if text and text not in files:
-                        files.append(text)
-        return files
+    # -- saved templates (step 2 is initialization; it need not run every time) ----
+
+    def saved_templates(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]] | None:
+        """What is already saved in the designated directory, or None if nothing is."""
+
+        resources_path = self.generated_dir / "resources.generated.yml"
+        capabilities_path = self.generated_dir / "capabilities.generated.yml"
+        if not resources_path.exists() or not capabilities_path.exists():
+            return None
+        try:
+            resources = (yaml.safe_load(resources_path.read_text(encoding="utf-8")) or {}).get(
+                "resources"
+            ) or []
+            capabilities = (
+                yaml.safe_load(capabilities_path.read_text(encoding="utf-8")) or {}
+            ).get("capabilities") or []
+        except (OSError, yaml.YAMLError):
+            return None
+        if not isinstance(resources, list) or not isinstance(capabilities, list):
+            return None
+        if not resources and not capabilities:
+            return None
+        return (
+            [item for item in resources if isinstance(item, dict)],
+            [item for item in capabilities if isinstance(item, dict)],
+        )
+
+    def saved_entries_for(
+        self, unit: PreflightInputBundle
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]] | None:
+        """The saved entries covering exactly this unit, or None if it is not covered."""
+
+        saved = self.saved_templates()
+        if saved is None:
+            return None
+        resources, capabilities = saved
+        wanted_inputs = {item.input_id for item in unit.local_resources} | {
+            item.input_id for item in unit.remote_resources
+        }
+        wanted_functions = {item.function_id for item in unit.functions}
+
+        unit_resources = [
+            item
+            for item in resources
+            if wanted_inputs
+            & {
+                str(value).strip()
+                for value in (item.get("metadata") or {}).get("source_input_ids") or []
+            }
+        ]
+        unit_capabilities = [
+            item
+            for item in capabilities
+            if str((item.get("metadata") or {}).get("source_function_id") or "").strip()
+            in wanted_functions
+        ]
+        covered_inputs = {
+            str(value).strip()
+            for item in unit_resources
+            for value in (item.get("metadata") or {}).get("source_input_ids") or []
+        }
+        covered_functions = {
+            str((item.get("metadata") or {}).get("source_function_id") or "").strip()
+            for item in unit_capabilities
+        }
+        if wanted_inputs - covered_inputs or wanted_functions - covered_functions:
+            return None
+        return unit_resources, unit_capabilities
+
+    def saved_covers(self, inputs: PreflightInputBundle) -> bool:
+        """Do the saved templates already cover every configured input?
+
+        This is what decides whether step 2 has to initialize anything: a new
+        directory or function in the configuration means the saved data is incomplete.
+        """
+
+        saved = self.saved_templates()
+        if saved is None:
+            return False
+        resources, capabilities = saved
+        covered_inputs = {
+            str(value).strip()
+            for item in resources
+            for value in (item.get("metadata") or {}).get("source_input_ids") or []
+        }
+        covered_functions = {
+            str((item.get("metadata") or {}).get("source_function_id") or "").strip()
+            for item in capabilities
+        }
+        configured_inputs = {item.input_id for item in inputs.local_resources} | {
+            item.input_id for item in inputs.remote_resources
+        }
+        configured_functions = {item.function_id for item in inputs.functions}
+        return configured_inputs <= covered_inputs and configured_functions <= covered_functions
+
+    def reuse_saved(self, inputs: PreflightInputBundle) -> Stage2MaterializationOutput:
+        """Use the saved templates as they are, without calling the CLI."""
+
+        saved = self.saved_templates()
+        if saved is None:
+            raise PreflightSourceConfigurationError(
+                f"第二步设为不执行，但 {self.generated_dir} 里没有已保存的资源/功能模版。"
+                "先让它执行一次（analyze: always），或把已有模版放到该目录。"
+            )
+        resources, capabilities = saved
+        missing_summary = [
+            str(item.get("id") or "")
+            for item in resources
+            if not str(item.get("summary") or "").strip()
+        ]
+        if missing_summary:
+            runtime_logger().warning(
+                "stage2.reuse 已保存模版缺少 summary（后续只能看到 id 与类型）：%s",
+                missing_summary,
+            )
+        self._write_receipt(
+            units=self._split_units(inputs),
+            resources=resources,
+            capabilities=capabilities,
+            failures=[],
+            engine="reused_saved",
+        )
+        runtime_logger().info(
+            "stage2.reuse 使用已保存模版 resources=%d capabilities=%d",
+            len(resources),
+            len(capabilities),
+        )
+        return Stage2MaterializationOutput(
+            resources_path=self.generated_dir / "resources.generated.yml",
+            capabilities_path=self.generated_dir / "capabilities.generated.yml",
+            resource_analysis_path=self.receipt_path,
+            function_analysis_path=self.receipt_path,
+            cli_engine="reused_saved",
+        )
 
     def materialize(
         self,
         inputs: PreflightInputBundle,
         *,
         explicit_engine: str | None = None,
+        reuse_saved: bool = False,
     ) -> Stage2MaterializationOutput:
         if inputs.total_count == 0:
             raise PreflightSourceConfigurationError(
@@ -1166,18 +1104,25 @@ class CliPreflightEngine:
         units = self._split_units(inputs)
         logger = runtime_logger()
         engine_id = ""
-        aggregated: dict[str, list] = {
-            "resource_analysis": [],
-            "function_analysis": [],
-            "resources": [],
-            "capabilities": [],
-        }
+        aggregated: dict[str, list] = {"resources": [], "capabilities": []}
         unit_failures: list[tuple[str, str]] = []
 
         build_state = self._load_build_state()
 
         for position, (label, unit) in enumerate(units, start=1):
             logger.info("stage2.unit start %d/%d %s", position, len(units), label)
+
+            # Step 2 initializes data. With `reuse_saved`, a unit that already has saved
+            # data is skipped entirely; only what is missing gets initialized, so adding
+            # one directory does not re-analyse everything — and does not go missing.
+            if reuse_saved:
+                saved_unit = self.saved_entries_for(unit)
+                if saved_unit is not None:
+                    aggregated["resources"].extend(saved_unit[0])
+                    aggregated["capabilities"].extend(saved_unit[1])
+                    logger.info("stage2.unit 跳过（已有保存数据） %s", label)
+                    continue
+
             fingerprint = self._unit_fingerprint(unit)
             try:
                 # The CLI must be called whenever this unit's configuration or the
@@ -1205,8 +1150,7 @@ class CliPreflightEngine:
                 raw = self.run_analysis(unit)
 
                 logger.info("stage2.unit step=validate %s", label)
-                evidence_index = self._validate_analysis_coverage(raw, unit)
-                self._bind_output_provenance(raw, unit, evidence_index)
+                self._validate_unit_output(raw, unit)
             except (PreflightAnalysisError, CliEngineError, OSError) as exc:
                 message = f"{type(exc).__name__}: {exc}"
                 logger.warning("stage2.unit failed %s -> %s", label, message)
@@ -1221,11 +1165,7 @@ class CliPreflightEngine:
                 aggregated[key].extend(raw.get(key) or [])
 
             # Only a fully validated unit may mark its generated code as current.
-            build_state[label] = {
-                "fingerprint": fingerprint,
-                "engine": engine_id,
-                "implementation_files": self._declared_implementation_files(raw),
-            }
+            build_state[label] = {"fingerprint": fingerprint, "engine": engine_id}
             self._save_build_state(build_state)
             logger.info("stage2.unit ok %s", label)
 
@@ -1234,13 +1174,14 @@ class CliPreflightEngine:
             raise PreflightAnalysisError(f"Stage 2 所有输入单元都失败：{detail}")
 
         raw = aggregated
-        resource_analysis = list(raw.get("resource_analysis") or [])
-        function_analysis = list(raw.get("function_analysis") or [])
-        self._write_analysis_file(
-            self.resource_analysis_path, "preflight.resource_analysis", resource_analysis
-        )
-        self._write_analysis_file(
-            self.function_analysis_path, "preflight.function_analysis", function_analysis
+        if not engine_id:
+            engine_id = "reused_saved"
+        self._write_receipt(
+            units=units,
+            resources=list(raw.get("resources") or []),
+            capabilities=list(raw.get("capabilities") or []),
+            failures=unit_failures,
+            engine=engine_id,
         )
 
         resources = [
@@ -1270,8 +1211,8 @@ class CliPreflightEngine:
         return Stage2MaterializationOutput(
             resources_path=resources_path,
             capabilities_path=capabilities_path,
-            resource_analysis_path=self.resource_analysis_path,
-            function_analysis_path=self.function_analysis_path,
+            resource_analysis_path=self.receipt_path,
+            function_analysis_path=self.receipt_path,
             cli_engine=engine_id,
         )
 
@@ -1290,6 +1231,7 @@ def _resource_record(item: Any, index: int) -> PreflightResourceRecord:
         resource_type=resource_type,
         source_identity=str(item.get("source_identity") or resource_id).strip(),
         payload=item.get("payload"),
+        summary=str(item.get("summary") or "").strip(),
         provider_id=str(item.get("provider_id") or "cli_project").strip(),
         availability=str(item.get("availability") or "").strip(),
         revision=item.get("revision"),
@@ -1303,14 +1245,17 @@ def _capability_record(item: Any, index: int) -> PreflightCapabilityRecord:
     capability_id = str(item.get("id") or item.get("capability_id") or "").strip()
     if not capability_id:
         raise PreflightAnalysisError(f"Stage 2 capabilities[{index}] 缺少 id。")
-    action_type = str(item.get("action_type") or "").strip()
-    if not action_type:
-        raise PreflightAnalysisError(f"Stage 2 capability '{capability_id}' 缺少 action_type。")
     return PreflightCapabilityRecord(
         capability_id=capability_id,
-        action_type=action_type,
+        # A function is a name; when the analysis did not characterise an action type,
+        # the name is the action type.
+        action_type=str(item.get("action_type") or capability_id).strip(),
+        identity=str(item.get("identity") or "").strip(),
         provider_id=str(item.get("provider_id") or "cli_project").strip(),
-        description=item.get("description"),
+        # A function is passed on as a name. Whatever description the analysis wrote
+        # about "what it can do" is dropped here: it would read as the function's
+        # ceiling to every later step.
+        description=None,
         principal=item.get("principal"),
         security_domain=item.get("security_domain"),
         permissions=tuple(str(value) for value in (item.get("permissions") or [])),

@@ -19,8 +19,11 @@ from typing import Any, Iterable
 
 import yaml
 
-from task_closed_loop.projects.config import ProjectConfigurationError, ProjectInputBindings
 from task_closed_loop.tasks.skill_chain_models import ProjectScope
+
+
+class ProjectScopeError(RuntimeError):
+    pass
 
 RESOURCES_FILE = "resources.generated.yml"
 CAPABILITIES_FILE = "capabilities.generated.yml"
@@ -28,23 +31,25 @@ CAPABILITIES_FILE = "capabilities.generated.yml"
 
 def _read_items(path: Path, key: str) -> list[dict[str, Any]]:
     if not path.exists():
-        raise ProjectConfigurationError(f"Stage 2 标准输出不存在：{path}")
+        raise ProjectScopeError(f"Stage 2 标准输出不存在：{path}")
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     items = data.get(key) or []
     if not isinstance(items, list):
-        raise ProjectConfigurationError(f"{path} 的 {key} 必须是列表。")
+        raise ProjectScopeError(f"{path} 的 {key} 必须是列表。")
     return [item for item in items if isinstance(item, dict)]
 
 
 @dataclass
 class ProjectScopeResolver:
     generated_dir: Path
-    bindings: ProjectInputBindings
 
     def __post_init__(self) -> None:
         self.generated_dir = Path(self.generated_dir).resolve()
         self._resource_inputs: dict[str, tuple[str, ...]] = {}
+        self._resource_summaries: dict[str, str] = {}
+        self._resource_types: dict[str, str] = {}
         self._capability_function: dict[str, str] = {}
+        self._capability_identity: dict[str, str] = {}
         self._loaded = False
 
     def _load(self) -> None:
@@ -54,10 +59,14 @@ class ProjectScopeResolver:
             resource_id = str(item.get("id") or "").strip()
             metadata = item.get("metadata") or {}
             sources = metadata.get("source_input_ids") if isinstance(metadata, dict) else None
-            if resource_id and isinstance(sources, list):
+            if not resource_id:
+                continue
+            if isinstance(sources, list):
                 self._resource_inputs[resource_id] = tuple(
                     str(value).strip() for value in sources if str(value).strip()
                 )
+            self._resource_summaries[resource_id] = str(item.get("summary") or "").strip()
+            self._resource_types[resource_id] = str(item.get("type") or "").strip()
         for item in _read_items(self.generated_dir / CAPABILITIES_FILE, "capabilities"):
             capability_id = str(item.get("id") or "").strip()
             metadata = item.get("metadata") or {}
@@ -68,6 +77,9 @@ class ProjectScopeResolver:
             )
             if capability_id:
                 self._capability_function[capability_id] = function_id
+                identity = str(item.get("identity") or "").strip()
+                if identity:
+                    self._capability_identity[function_id or capability_id] = identity
         self._loaded = True
 
     # -- provenance ---------------------------------------------------------
@@ -93,13 +105,8 @@ class ProjectScopeResolver:
 
     # -- what the model sees ------------------------------------------------
 
-    def capability_briefs(self, capabilities: Iterable[Any]) -> tuple[str, ...]:
-        """Just the function names, one per function.
-
-        Not per operation, and without a blurb: a model already knows what codex or a
-        mailbox is, and will look up what it does not know. Spelling out "what this
-        function can do" only teaches it that the function can do nothing else.
-        """
+    def capability_names(self, capabilities: Iterable[Any]) -> tuple[str, ...]:
+        """The function names, one per function — not per operation."""
 
         self._load()
         names: list[str] = []
@@ -112,18 +119,36 @@ class ProjectScopeResolver:
                 names.append(function_id)
         return tuple(names)
 
+    def capability_briefs(self, capabilities: Iterable[Any]) -> tuple[dict[str, str], ...]:
+        """Name + identity, one entry per function.
+
+        `identity` says who made it and what kind of tool it is — never what it can do.
+        A model already knows codex or a mailbox, and looks up what it does not know;
+        an ability list would only teach it that the function can do nothing else.
+        """
+
+        self._load()
+        briefs: list[dict[str, str]] = []
+        for function_id in self.capability_names(capabilities):
+            brief = {"function": function_id}
+            identity = self._capability_identity.get(function_id, "")
+            if identity:
+                brief["identity"] = identity
+            briefs.append(brief)
+        return tuple(briefs)
+
     def resource_briefs(
         self,
         resources: Iterable[Any],
         *,
         project_id: str = "",
-        assignment=None,
+        project_set=None,
     ) -> tuple[dict[str, str], ...]:
-        """id + the one-line description + (for a project) why it has this resource.
+        """id + the analysis `summary` + (for a project) why it has this resource.
 
-        No payload: the observed detail enters the chain once, through the reality the
-        reality builder writes from the full resources. Stage 4 still audits against
-        the full objects.
+        No payload. `summary` is the one line the analysis wrote — what this is, what it
+        holds now, how far along it is — and it is what every step after Stage 2 reads.
+        Stage 4 still audits against the full resource objects.
         """
 
         self._load()
@@ -133,13 +158,15 @@ class ProjectScopeResolver:
             if not resource_id:
                 continue
             brief = {"resource_id": resource_id}
-            description = ""
-            for input_id in self._resource_inputs.get(resource_id, ()):
-                description = description or self.bindings.resource_descriptions.get(input_id, "")
-            if description:
-                brief["description"] = description
-            if project_id and assignment is not None:
-                for owner in assignment.owners_of(resource_id):
+            summary = self._resource_summaries.get(resource_id, "")
+            if not summary:
+                # Saved templates from before `summary` existed: say what little is known
+                # rather than pretending.
+                resource_type = self._resource_types.get(resource_id, "")
+                summary = f"（分析未提供 summary）{resource_type}".strip()
+            brief["summary"] = summary
+            if project_id and project_set is not None:
+                for owner in project_set.owners_of(resource_id):
                     if owner.project_id == project_id and (owner.note or owner.role):
                         brief["note"] = owner.note or owner.role
                         break
@@ -152,16 +179,16 @@ class ProjectScopeResolver:
         self,
         resources: Iterable[Any],
         capabilities: Iterable[Any],
-        assignment,
+        project_set,
     ) -> list[ProjectScope]:
-        """One scope per project that owns at least one resource this run."""
+        """One scope per discovered project, with the resources it is based on."""
 
         resources = list(resources)
         capabilities = list(capabilities)
         per_project: dict[str, list[Any]] = {}
 
         for resource in resources:
-            for owner in assignment.owners_of(resource.resource_id):
+            for owner in project_set.owners_of(resource.resource_id):
                 per_project.setdefault(owner.project_id, []).append(resource)
 
         shared_capabilities = tuple(capabilities)
@@ -169,7 +196,7 @@ class ProjectScopeResolver:
         capability_ids = self.capability_ids_by_function()
 
         scopes: list[ProjectScope] = []
-        for project in self.bindings.projects:
+        for project in project_set.projects:
             owned = per_project.get(project.project_id, [])
             if not owned:
                 # No resources of its own means nothing for this project to work on;
@@ -181,7 +208,7 @@ class ProjectScopeResolver:
                     resources=tuple(owned),
                     capabilities=shared_capabilities,
                     resource_briefs=self.resource_briefs(
-                        owned, project_id=project.project_id, assignment=assignment
+                        owned, project_id=project.project_id, project_set=project_set
                     ),
                     capability_briefs=capability_names,
                     capability_ids_by_function=capability_ids,

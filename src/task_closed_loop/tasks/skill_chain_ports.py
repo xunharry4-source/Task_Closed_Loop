@@ -10,7 +10,6 @@ from __future__ import annotations
 from typing import Any, Protocol
 
 from task_closed_loop.integration.models import CapabilityDescriptor, ResourceSnapshot
-from task_closed_loop.reality.models import RealitySnapshot
 from task_closed_loop.tasks.models import TaskCandidate
 from task_closed_loop.tasks.skill_chain_models import (
     DemandRecord,
@@ -21,20 +20,19 @@ from task_closed_loop.tasks.skill_chain_models import (
 
 
 class ProjectChainReasonerPort(Protocol):
-    """Four independent discovery steps, then one call per theme.
+    """Three independent discovery steps, then themes, then one call per theme.
 
-    Problems, values, demands and themes are siblings: each is derived from the
-    project's own resources, reality and capabilities, and none of them reads another's
-    conclusions. Chaining them would let one step's blind spot become the next step's
-    starting point. Only the per-theme task call sees all three middle layers, because
-    that is where a task picks the source record it comes from.
+    Problems, values and demands are siblings: each is derived from the project's own
+    resources and functions, and none reads another's conclusions — chaining them would
+    let one step's blind spot become the next step's starting point. Themes then read
+    all three. The task step sees only resources, functions, the project and one theme,
+    so a task inherits its lineage from that theme.
     """
 
     async def discover_project_problems(
         self,
         project: dict[str, Any],
         resources: list[ResourceSnapshot],
-        reality: RealitySnapshot,
         capabilities: list[CapabilityDescriptor],
         existing_tasks: list[Any],
     ) -> list[ProblemRecord]:
@@ -44,7 +42,6 @@ class ProjectChainReasonerPort(Protocol):
         self,
         project: dict[str, Any],
         resources: list[ResourceSnapshot],
-        reality: RealitySnapshot,
         capabilities: list[CapabilityDescriptor],
         existing_tasks: list[Any],
     ) -> list[ValueRecord]:
@@ -54,7 +51,6 @@ class ProjectChainReasonerPort(Protocol):
         self,
         project: dict[str, Any],
         resources: list[ResourceSnapshot],
-        reality: RealitySnapshot,
         capabilities: list[CapabilityDescriptor],
     ) -> list[DemandRecord]:
         ...
@@ -63,8 +59,10 @@ class ProjectChainReasonerPort(Protocol):
         self,
         project: dict[str, Any],
         resources: list[ResourceSnapshot],
-        reality: RealitySnapshot,
         capabilities: list[CapabilityDescriptor],
+        problems: list[ProblemRecord],
+        values: list[ValueRecord],
+        demands: list[DemandRecord],
         fixed_themes: list[str],
         previous_theme_yield: dict[str, int],
     ) -> ThemePlan:
@@ -77,14 +75,9 @@ class ProjectChainReasonerPort(Protocol):
         theme_kind: str,
         theme_instruction: str,
         resource_info: str,
-        capability_info: str,
         resources: list[ResourceSnapshot],
-        reality: RealitySnapshot,
         capabilities: list[CapabilityDescriptor],
-        problems: list[ProblemRecord],
-        values: list[ValueRecord],
-        demands: list[DemandRecord],
         existing_tasks: list[Any],
-    ) -> list[tuple[TaskCandidate, str, str]]:
-        """Returns (candidate, source_kind, source_ref_id) triples."""
+    ) -> list[TaskCandidate]:
+        """Tasks of one theme. Lineage is attached by the Host from the theme."""
         ...

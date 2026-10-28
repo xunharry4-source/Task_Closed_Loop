@@ -90,33 +90,24 @@ async def _run_project_chain(*, config, root, logger, artifacts, flow_id, minimu
         logger=logger,
     )
     if not chain.items:
-        raise RuntimeError(
-            "没有任何数据源或功能归属到已声明的项目；"
-            "请在 config/preflight_sources.yml 的条目上填写 entities。"
-        )
+        raise RuntimeError("第三步没有生成任何项目，无法继续。")
 
-    assignment = chain.assignment
+    project_set = chain.project_set
     logger.info(
         "runtime.projects week=%s projects=%s store=%s",
         chain.week,
         [item.project.project_id for item in chain.items],
         getattr(chain.store, "path", None),
     )
-    if assignment is not None:
+    if project_set is not None:
         artifacts.write_json(
-            "project_assignment.json",
+            "projects.json",
             {
                 "flow_id": flow_id,
-                "assignments": assignment.to_payload(),
-                "origin": dict(assignment.origin),
-                "unassigned_resources": list(assignment.unassigned()),
+                **project_set.to_payload(),
+                "origin": dict(project_set.origin),
             },
         )
-        if assignment.unassigned():
-            logger.warning(
-                "runtime.projects 未归属的资源（不会产生任务）：%s",
-                list(assignment.unassigned()),
-            )
 
     produced: list = []
     try:

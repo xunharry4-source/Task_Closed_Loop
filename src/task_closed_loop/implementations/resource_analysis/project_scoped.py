@@ -12,7 +12,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from task_closed_loop.contracts import ResourceCapabilityResult
-from task_closed_loop.projects.config import ProjectInputBindings
 from task_closed_loop.projects.grouping import ProjectScopeResolver
 from task_closed_loop.tasks.skill_chain_models import ProjectScope
 
@@ -20,8 +19,7 @@ from task_closed_loop.tasks.skill_chain_models import ProjectScope
 class ProjectStage2Cache:
     """Holds the single Stage 2 materialization and the per-project split of it."""
 
-    def __init__(self, *, bindings: ProjectInputBindings, logger=None):
-        self.bindings = bindings
+    def __init__(self, *, logger=None):
         self.logger = logger
         self._result: ResourceCapabilityResult | None = None
         self._resolver: ProjectScopeResolver | None = None
@@ -36,8 +34,7 @@ class ProjectStage2Cache:
             return self._result
         result = analyzer.analyze(cli_project)
         self._resolver = ProjectScopeResolver(
-            generated_dir=Path(result.resources_path).parent,
-            bindings=self.bindings,
+            generated_dir=Path(result.resources_path).parent
         )
         self._result = result
         return result
@@ -48,13 +45,13 @@ class ProjectStage2Cache:
             raise RuntimeError("Stage 2 还没有执行，拿不到资源来源信息。")
         return self._resolver
 
-    def apply_assignment(self, assignment) -> tuple[ProjectScope, ...]:
-        """Split the materialized output once the owner of each resource is known."""
+    def apply_projects(self, project_set) -> tuple[ProjectScope, ...]:
+        """Split the materialized output across the projects step 3 produced."""
 
         if self._result is None:
             raise RuntimeError("Stage 2 还没有执行，无法按项目切分。")
         scopes = self.resolver.scopes(
-            self._result.resources, self._result.capabilities, assignment
+            self._result.resources, self._result.capabilities, project_set
         )
         self._scopes = {scope.project.project_id: scope for scope in scopes}
         if self.logger is not None:
@@ -63,7 +60,9 @@ class ProjectStage2Cache:
                 {
                     scope.project.project_id: {
                         "resources": [r.resource_id for r in scope.resources],
-                        "functions": list(scope.capability_briefs),
+                        "functions": [
+                            brief.get("function") for brief in scope.capability_briefs
+                        ],
                     }
                     for scope in scopes
                 },

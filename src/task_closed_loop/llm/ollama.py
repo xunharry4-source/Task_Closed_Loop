@@ -16,12 +16,14 @@ from task_closed_loop.model_io import (
     to_model_input,
 )
 from task_closed_loop.llm.prompt_registry import PromptRegistry
+from task_closed_loop.llm.prompt_template import build_role_prompt
 from task_closed_loop.llm import skill_chain_io
 from task_closed_loop.llm.prompt_cache import PromptRequestCache
 from task_closed_loop.reality.models import RealitySnapshot
 from task_closed_loop.tasks.generation_models import (
     CandidateFailureContext,
     CandidateFieldRepair,
+    CandidateFieldReview,
     CoverageDimension,
     DiscoverySignal,
     TaskOutcomeRecord,
@@ -247,15 +249,22 @@ class OllamaLLM:
                 + suffix
             )
 
-    def _role_prompt(
+    def _build_prompt(
         self,
         role_key: str,
-    ) -> str:
-        prompt_name = self.roles.get(
-            role_key,
-            role_key,
+        input_payload: dict[str, Any],
+    ):
+        """提示词（内置或用户自己写的）+ `{{变量名}}` 替换。
+
+        模板自己写了输入，`include_input` 就是 False，本轮输入不再单独发一遍。
+        """
+
+        prompt_name = self.roles.get(role_key, role_key)
+        return build_role_prompt(
+            self.prompts.template(prompt_name),
+            role_key=role_key,
+            payload=_jsonable(input_payload),
         )
-        return self.prompts.get(prompt_name)
 
     async def _chat_json(
         self,
@@ -267,14 +276,13 @@ class OllamaLLM:
         # The model works with readable names; domain parsing keeps internal ones.
         input_payload = to_model_input(input_payload)
         contract = to_model_contract(contract)
-        system_prompt = self._role_prompt(
-            role_key
-        )
+        built = self._build_prompt(role_key, input_payload)
+        system_prompt = built.text
 
-        user_payload = {
-            "input": _jsonable(input_payload),
-            "response_contract": contract,
-        }
+        user_payload: dict[str, Any] = {}
+        if built.include_input:
+            user_payload["input"] = _jsonable(input_payload)
+        user_payload["response_contract"] = contract
 
         messages = [
             {
@@ -1052,8 +1060,6 @@ class OllamaLLM:
             },
             contract={
                 "core_valid": "boolean",
-                "repair_required": "boolean",
-                "field_issues": ["string"],
                 "challenge": "string",
                 "evidence": ["string"],
                 "reason": "string",
@@ -1062,6 +1068,41 @@ class OllamaLLM:
         return CandidateReview(
             candidate_id=candidate.candidate_id,
             keep=bool(parsed.get("core_valid")),
+            challenge=str(parsed.get("challenge") or ""),
+            evidence=tuple(
+                str(value)
+                for value in (parsed.get("evidence") or [])
+            ),
+            reason=str(parsed.get("reason") or ""),
+        )
+
+    async def review_candidate_fields(
+        self,
+        resources,
+        reality,
+        candidate,
+        existing_tasks,
+        capabilities,
+    ):
+        parsed = await self._chat_json(
+            role_key="task_candidate_field_audit",
+            input_payload={
+                "current_resources": resources,
+                "current_reality": reality,
+                "candidate": candidate,
+                "effective_existing_tasks": existing_tasks,
+                "current_capabilities": capabilities,
+            },
+            contract={
+                "repair_required": "boolean",
+                "field_issues": ["string"],
+                "challenge": "string",
+                "evidence": ["string"],
+                "reason": "string",
+            },
+        )
+        return CandidateFieldReview(
+            candidate_id=candidate.candidate_id,
             repair_required=bool(parsed.get("repair_required")),
             field_issues=tuple(
                 str(value)
@@ -1170,7 +1211,6 @@ class OllamaLLM:
             role_key="task_reality_validity",
             input_payload={
                 "current_resources": resources,
-                "current_reality": reality,
                 "current_capabilities": capabilities,
                 "task": task,
             },
@@ -1218,6 +1258,18 @@ class OllamaLLM:
 
     # ---- first-step chain: project -> problem / value / demand -> task ----
 
+    async def discover_projects(self, resources, capabilities, known_projects):
+        parsed = await self._chat_json(
+            role_key="project_discovery",
+            input_payload={
+                "current_resources": resources,
+                "current_capabilities": capabilities,
+                "known_projects": list(known_projects or []),
+            },
+            contract=skill_chain_io.PROJECT_CONTRACT,
+        )
+        return skill_chain_io.projects_from_payload(parsed)
+
     async def assign_resources_to_projects(self, projects, resources, reality):
         parsed = await self._chat_json(
             role_key="project_assignment",
@@ -1231,14 +1283,13 @@ class OllamaLLM:
         return skill_chain_io.assignments_from_payload(parsed)
 
     async def discover_project_problems(
-        self, project, resources, reality, capabilities, existing_tasks
+        self, project, resources, capabilities, existing_tasks
     ):
         parsed = await self._chat_json(
             role_key="problem_discovery",
             input_payload={
                 "project": project,
                 "current_resources": resources,
-                "current_reality": reality,
                 "current_capabilities": capabilities,
                 "effective_existing_tasks": existing_tasks,
             },
@@ -1247,14 +1298,13 @@ class OllamaLLM:
         return skill_chain_io.problems_from_payload(parsed)
 
     async def discover_project_values(
-        self, project, resources, reality, capabilities, existing_tasks
+        self, project, resources, capabilities, existing_tasks
     ):
         parsed = await self._chat_json(
             role_key="value_discovery",
             input_payload={
                 "project": project,
                 "current_resources": resources,
-                "current_reality": reality,
                 "current_capabilities": capabilities,
                 "effective_existing_tasks": existing_tasks,
             },
@@ -1263,14 +1313,13 @@ class OllamaLLM:
         return skill_chain_io.values_from_payload(parsed)
 
     async def discover_project_demands(
-        self, project, resources, reality, capabilities
+        self, project, resources, capabilities
     ):
         parsed = await self._chat_json(
             role_key="demand_discovery",
             input_payload={
                 "project": project,
                 "current_resources": resources,
-                "current_reality": reality,
                 "current_capabilities": capabilities,
             },
             contract=skill_chain_io.DEMANDS_CONTRACT,
@@ -1281,8 +1330,10 @@ class OllamaLLM:
         self,
         project,
         resources,
-        reality,
         capabilities,
+        problems,
+        values,
+        demands,
         fixed_themes,
         previous_theme_yield,
     ):
@@ -1291,8 +1342,10 @@ class OllamaLLM:
             input_payload={
                 "project": project,
                 "current_resources": resources,
-                "current_reality": reality,
                 "current_capabilities": capabilities,
+                "problems": problems,
+                "value_opportunities": values,
+                "capability_voids": demands,
                 "fixed_themes": list(fixed_themes),
                 "previous_theme_yield": dict(previous_theme_yield or {}),
             },
@@ -1307,13 +1360,8 @@ class OllamaLLM:
         theme_kind,
         theme_instruction,
         resource_info,
-        capability_info,
         resources,
-        reality,
         capabilities,
-        problems,
-        values,
-        demands,
         existing_tasks,
     ):
         parsed = await self._chat_json(
@@ -1324,13 +1372,8 @@ class OllamaLLM:
                 "theme_kind": theme_kind,
                 "theme_instruction": theme_instruction,
                 "resource_info": resource_info,
-                "capability_info": capability_info,
                 "current_resources": resources,
-                "current_reality": reality,
                 "current_capabilities": capabilities,
-                "problems": problems,
-                "value_opportunities": values,
-                "capability_voids": demands,
                 "effective_existing_tasks": existing_tasks,
             },
             contract=skill_chain_io.THEME_TASKS_CONTRACT,

@@ -1,0 +1,42 @@
+# 这个文件分两部分：
+#   给用户看的：说明 / 变量          —— 系统完全不读，爱写多少写多少
+#   给系统用的：设置 / 提示词        —— 系统只读这两个
+#
+# 变量由系统提供（见 src/task_closed_loop/llm/prompt_template.py 的 VARIABLES），你只管用：
+# 把 {{变量名}} 放到提示词正文的任何位置，本轮的真实内容就替换在那个位置；
+# 调整它在正文里的位置，就等于调整提示词——替换照旧正确。
+角色: output_template
+说明: |
+  运行期输出模板，不走模型调用。
+变量: |
+  不走模型调用，不做变量替换。
+设置:
+  append_input: auto      # auto 默认（正文用了输入变量就不再追加【本轮输入】）/ always 总是追加 / never 从不追加
+
+提示词: |
+  # Runtime 输出模板
+
+  ```text
+  【Current Reality】
+
+  【Task Generation Result】
+
+  Task 1
+  任务：
+  对用户的价值：
+  需要得到什么结果：
+  执行步骤：
+  1.
+  2.
+  3.
+
+  Task 2
+  ...
+  ```
+
+  每个 Task 的用户可读输出必须明确包含：
+
+  - 任务：Task description
+  - 对用户的价值：user_value
+  - 需要得到什么结果：expected_reality_result
+  - 执行步骤：execution_steps

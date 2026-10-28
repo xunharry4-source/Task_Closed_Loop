@@ -279,9 +279,8 @@ class LMStudioLLM(GeminiLLM):
         # The model works with readable names; domain parsing keeps internal ones.
         input_payload = to_model_input(input_payload)
         schema = to_model_schema(schema)
-        prompt = self._role_prompt(
-            role_key
-        )
+        built = self._build_prompt(role_key, input_payload)
+        prompt = built.text
 
         user_text = json.dumps(
             _jsonable(input_payload),
@@ -302,9 +301,8 @@ class LMStudioLLM(GeminiLLM):
                 {
                     "role": "user",
                     "content": (
-                        "【本轮输入】\n"
-                        + user_text
-                        + "\n\n根据本轮输入完成上述职责。"
+                        ("【本轮输入】\n" + user_text + "\n\n" if built.include_input else "")
+                        + "根据本轮输入完成上述职责。"
                     ),
                 },
             ],

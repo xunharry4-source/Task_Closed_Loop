@@ -41,6 +41,34 @@ def _object(properties: dict[str, Any]) -> dict[str, Any]:
 
 # --- JSON schema family -----------------------------------------------------
 
+PROJECT_SCHEMA = _object(
+    {
+        "projects": {
+            "type": "array",
+            "items": _object(
+                {
+                    "project_id": {"type": "string"},
+                    "name": {"type": "string"},
+                    "description": {"type": "string"},
+                    "resource_ids": _STRING_ARRAY,
+                }
+            ),
+        }
+    }
+)
+
+PROJECT_CONTRACT = {
+    "projects": [
+        {
+            "project_id": "string",
+            "name": "string",
+            "description": "string",
+            "resource_ids": ["string"],
+        }
+    ]
+}
+
+
 _ASSIGNED_PROJECT_SCHEMA = _object(
     {"project_id": {"type": "string"}, "note": {"type": "string"}}
 )
@@ -117,12 +145,20 @@ DEMANDS_SCHEMA = _object(
     {"capability_voids": {"type": "array", "items": DEMAND_ITEM_SCHEMA}}
 )
 
-_THEME_ITEM_SCHEMA = _object({"theme": {"type": "string"}, "reason": {"type": "string"}})
+_THEME_ITEM_SCHEMA = _object(
+    {
+        "theme": {"type": "string"},
+        "reason": {"type": "string"},
+        # Which problem / value / demand records this theme covers. Tasks generated
+        # under the theme inherit their lineage from here, because the task step only
+        # sees resources, functions, the project and the theme.
+        "source_refs": _STRING_ARRAY,
+    }
+)
 THEME_PLAN_SCHEMA = _object(
     {
         "resource_info": {"type": "string"},
-        "capability_info": {"type": "string"},
-        "derived_themes": {"type": "array", "items": _THEME_ITEM_SCHEMA},
+        "themes": {"type": "array", "items": _THEME_ITEM_SCHEMA},
         "skipped_fixed_themes": {"type": "array", "items": _THEME_ITEM_SCHEMA},
     }
 )
@@ -130,7 +166,6 @@ THEME_PLAN_SCHEMA = _object(
 THEME_CANDIDATE_SCHEMA = _object(
     {
         "task_identity": {"type": "string"},
-        "reality_id": {"type": "string"},
         "description": {"type": "string"},
         "work_relation": {"type": "string"},
         "reality_basis": {"type": "string"},
@@ -141,8 +176,6 @@ THEME_CANDIDATE_SCHEMA = _object(
         "user_value": {"type": "string"},
         "execution_steps": _STRING_ARRAY,
         "needed_functions": _STRING_ARRAY,
-        "source_kind": {"type": "string", "enum": ["problem", "value", "demand"]},
-        "source_ref_id": {"type": "string"},
     }
 )
 THEME_TASKS_SCHEMA = _object(
@@ -202,8 +235,7 @@ DEMANDS_CONTRACT = {
 
 THEME_PLAN_CONTRACT = {
     "resource_info": "string",
-    "capability_info": "string",
-    "derived_themes": [{"theme": "string", "reason": "string"}],
+    "themes": [{"theme": "string", "reason": "string", "source_refs": ["string"]}],
     "skipped_fixed_themes": [{"theme": "string", "reason": "string"}],
 }
 
@@ -211,7 +243,6 @@ THEME_TASKS_CONTRACT = {
     "candidates": [
         {
             "task_identity": "string",
-            "reality_id": "string",
             "description": "string",
             "work_relation": "string",
             "reality_basis": "string",
@@ -222,8 +253,6 @@ THEME_TASKS_CONTRACT = {
             "user_value": "string",
             "execution_steps": ["string"],
             "needed_functions": ["string"],
-            "source_kind": "problem|value|demand",
-            "source_ref_id": "string",
         }
     ]
 }
@@ -256,6 +285,26 @@ def _items(parsed: Any, key: str) -> list[dict[str, Any]]:
     if not isinstance(raw, list):
         return []
     return [item for item in raw if isinstance(item, dict)]
+
+
+def projects_from_payload(parsed: Any) -> list[dict[str, Any]]:
+    """The projects the analysis found, with the resources each is based on."""
+
+    out: list[dict[str, Any]] = []
+    for item in _items(parsed, "projects"):
+        name = _text(item.get("name"))
+        resource_ids = _refs(item.get("resource_ids"))
+        if not name or not resource_ids:
+            continue
+        out.append(
+            {
+                "project_id": _text(item.get("project_id")),
+                "name": name,
+                "description": _text(item.get("description")),
+                "resource_ids": list(resource_ids),
+            }
+        )
+    return out
 
 
 def assignments_from_payload(parsed: Any) -> dict[str, tuple[tuple[str, str], ...]]:
@@ -351,32 +400,34 @@ def demands_from_payload(parsed: Any) -> list[DemandRecord]:
 
 
 def theme_plan_from_payload(parsed: Any) -> ThemePlan:
-    def pairs(key: str) -> tuple[dict[str, str], ...]:
-        out: list[dict[str, str]] = []
+    def entries(key: str, *, with_sources: bool) -> tuple[dict[str, Any], ...]:
+        out: list[dict[str, Any]] = []
         for item in _items(parsed, key):
             theme = _text(item.get("theme"))
-            if theme:
-                out.append({"theme": theme, "reason": _text(item.get("reason"))})
+            if not theme:
+                continue
+            entry: dict[str, Any] = {"theme": theme, "reason": _text(item.get("reason"))}
+            if with_sources:
+                entry["source_refs"] = list(_refs(item.get("source_refs")))
+            out.append(entry)
         return tuple(out)
 
     parsed_dict = parsed if isinstance(parsed, dict) else {}
     return ThemePlan(
         resource_info=_text(parsed_dict.get("resource_info")),
-        capability_info=_text(parsed_dict.get("capability_info")),
-        themes=pairs("derived_themes"),
-        skipped_fixed_themes=pairs("skipped_fixed_themes"),
+        themes=entries("themes", with_sources=True),
+        skipped_fixed_themes=entries("skipped_fixed_themes", with_sources=False),
     )
 
 
-def theme_tasks_from_payload(parsed: Any) -> list[tuple[TaskCandidate, str, str]]:
-    """Returns (candidate, source_kind, source_ref_id).
+def theme_tasks_from_payload(parsed: Any) -> list[TaskCandidate]:
+    """The tasks of one theme.
 
-    Lineage is kept beside the candidate rather than inside it: the Host decides whether
-    the referenced record exists, and a candidate without a real source never becomes a
-    task.
+    They carry no lineage of their own: this step only sees resources, functions, the
+    project and the theme, so the Host attaches the theme's source record afterwards.
     """
 
-    out: list[tuple[TaskCandidate, str, str]] = []
+    out: list[TaskCandidate] = []
     for item in _items(parsed, "candidates"):
         user_value = _text(item.get("user_value"))
         steps = item.get("execution_steps") or []
@@ -396,7 +447,8 @@ def theme_tasks_from_payload(parsed: Any) -> list[tuple[TaskCandidate, str, str]
             metadata["needed_functions"] = list(needed_functions)
         candidate = TaskCandidate(
             task_identity=_text(item.get("task_identity")),
-            reality_id=_text(item.get("reality_id")),
+            # reality_id is assigned by the Host: one project, one reality.
+            reality_id="",
             description=_text(item.get("description")),
             reality_basis=_text(item.get("reality_basis")),
             expected_reality_result=_text(item.get("expected_reality_result")),
@@ -407,11 +459,5 @@ def theme_tasks_from_payload(parsed: Any) -> list[tuple[TaskCandidate, str, str]
             reality_basis_refs=_refs(item.get("reality_basis_refs")),
             identity_anchor_refs=_refs(item.get("identity_anchor_refs")),
         )
-        out.append(
-            (
-                candidate,
-                _text(item.get("source_kind")).lower(),
-                _text(item.get("source_ref_id")),
-            )
-        )
+        out.append(candidate)
     return out

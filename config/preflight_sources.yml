@@ -1,97 +1,30 @@
-# Stage 2 fixed input contract. The filename is retained for compatibility, but the
-# only accepted top-level section is preflight_inputs.
+# 第一步：你只配三件事——工作目录、功能、用哪个 CLI。
+#
+# 其余一切由第二步分析得出：资源 id 由目录名生成，"这是什么、现在有什么、到什么程度"
+# 由分析写进资源的 summary，功能是否可用由分析实测。
+# 需要凭据的功能，凭据只放 cli_project/.env，这里不写。
 preflight_inputs:
   enabled: true
 
-  cli:
-    # Empty means: select the first READY engine from execution.capability_project.allowed_cli_engines.
-    engine: ${PREFLIGHT_CLI_ENGINE:}
+  # 用哪个 CLI：codex（chatgpt）/ gemini / claude
+  cli: ${PREFLIGHT_CLI:codex}
 
-  # ── 所属项目：自动判断，不用你填 ──────────────────────────────────
-  # 每份资源属于哪个项目，由系统自己判断：拿项目清单（config/projects.yml 的
-  # id / 名称 / 说明）对照这份资源的简介与 Stage 2 实际扫描到的情况。
-  # 一份资源可以同时属于多个项目（行情数据既是数据管线在维护的，也是各策略在用的），
-  # 结果缓存在 cli_project/state/project_assignment.yml，项目或资源没变就不再重复判断。
-  #
-  # 只有想手工钉住某一份资源时才写 entities（可选覆盖）：
-  #   entities:
-  #     - id: data_pipeline
-  #       note: 只使用 day/ week/ 整合交易数据 三个目录
-  #
-  # 功能（functions）不分项目：所有项目都可以使用全部已配置的功能。
-  # 唯一的隔离边界是资源。
-  # ───────────────────────────────────────────────────────────────
+  # 第二步（分析并填模版）什么时候执行——它本来就是初始化数据：
+  #   auto   默认。指定目录里没有这一项的数据才跑；已经有了就跳过。
+  #          新增一个目录/功能时，只初始化新增的那一项。
+  #   always 手动触发：全部重新初始化
+  #   never  从不执行，只用已保存的数据
+  analyze: ${PREFLIGHT_ANALYZE:auto}
 
-  # 本地资源目录。相对路径相对 task-closed-loop 项目根目录解析；目录不存在时 Stage 2 拒绝启动。
-  #
-  # description 必填，由你填写：
-  #   用一句话说明【这是什么】——属于什么业务、什么系统、什么用途。
-  #   不要写里面有哪些数据、什么结构、哪些字段、有什么问题——
-  #   那些由 Stage 2 实际扫描后给出，写进来只会污染分析结果。
-  #
-  #   好：美股历史行情与交易数据，持续更新。
-  #   好：公司合同与法务文档归档目录。
-  #   差：里面有 30 个标的的日线 CSV，其中 TSLA 缺 3 天。   ← 这是 Stage 2 该发现的
-  local_resources:
-    - id: trading_data
-      directory: /Users/harry/Documents/git/trading_data
-      description: 美股历史行情与交易数据，持续更新。
+  # 工作目录，可多个，只写路径
+  directories:
+    - /Users/harry/Documents/trading_data
+    - /Users/harry/Documents/world
 
-  # 远端资源作用域，例如网盘的某个目录。每条必须通过 function_id 引用一个已配置的功能。
-  # description 必填，规则同上：一句话说明这是什么，不写里面有什么。
-  remote_resources: []
-
-  # 真实的外部功能/系统：Gmail、网盘、数据库、API、日历、命令行工具等。
-  # 真实凭据只存放在 cli_project/.env；本文件只写 secret_refs，
-  # 禁止内联 password / token / DSN / connection_string 等值。
-  #
-  # description 必填，由你填写：
-  #   用一句话说明【这是什么功能】。
-  #   不要写它能做哪些操作、哪些当前可用——那些由 Stage 2 实际探测后给出。
-  #
-  #   好：本地 codex 命令行编码代理，可编写并执行代码来处理已取得的数据。
-  #   好：公司主邮箱，已授权读取。
-  #   差：支持 search_messages / read_message / send_message 三个操作。  ← 这是 Stage 2 该探测的
-  #
-  # operations 留空 = 不限制 Stage 2 能报告哪些操作（推荐）。
-  # 填了就是白名单：Stage 2 报告清单以外的操作会被直接拒绝。
+  # 功能，可多个，只写名字
   functions:
-    - id: codex_cli
-      kind: coding_agent_cli
-      description: 本地 codex 命令行编码代理，可编写并执行代码来处理和分析已取得的数据。
-      operations: []
-      config:
-        command: codex
-
-# Example (commented):
-# preflight_inputs:
-#   enabled: true
-#   local_resources:
-#     - id: local_project_docs
-#       directory: ./user_resources/project_docs
-#       description: Local project documents to inventory and analyze.
-#
-#   remote_resources:
-#     - id: team_drive_folder
-#       kind: cloud_drive_directory
-#       function_id: team_drive
-#       scope:
-#         folder_id: shared-project-folder
-#       description: Team drive project folder.
-#
-#   functions:
-#     - id: team_drive
-#       kind: cloud_drive
-#       description: Authorized team cloud drive.
-#       secret_refs: [DRIVE_CREDENTIAL]
-#       operations: [list_files, read_file, search_files]
-#       scope:
-#         account: team_drive_primary
-#
-#     - id: primary_mailbox
-#       kind: gmail
-#       description: Authorized primary mailbox.
-#       secret_refs: [GMAIL_CREDENTIAL]
-#       operations: [search_messages, read_message]
-#       scope:
-#         account: primary_mailbox
+    - codex
+    - gemini
+    - claude
+    - moomoo
+    - ibkr

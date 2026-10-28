@@ -12,6 +12,7 @@ from task_closed_loop.reality.models import (
 from task_closed_loop.tasks.generation_models import (
     CandidateFailureContext,
     CandidateFieldRepair,
+    CandidateFieldReview,
     CandidateReview,
     DiscoverySignal,
     CandidateSetReview,
@@ -146,6 +147,20 @@ class TaskGenerationReasonerPort(
             CapabilityDescriptor
         ],
     ) -> CandidateReview:
+        """Single-candidate core validity only (is the work relation real)."""
+        ...
+
+    async def review_candidate_fields(
+        self,
+        resources: list[ResourceSnapshot],
+        reality: RealitySnapshot,
+        candidate: TaskCandidate,
+        existing_tasks: list[Task],
+        capabilities: list[
+            CapabilityDescriptor
+        ],
+    ) -> CandidateFieldReview:
+        """Single-candidate field quality; call only after core validity passes."""
         ...
 
     async def destructive_review_candidate_set(

@@ -64,14 +64,18 @@ class GemmaLLM(GeminiLLM):
         input_payload: dict[str, Any],
         schema: dict[str, Any],
     ):
-        prompt = self._role_prompt(role_key)
+        built = self._build_prompt(role_key, input_payload)
         input_text = (
-            prompt
-            + "\n\n【本轮输入】\n"
-            + __import__("json").dumps(
-                _jsonable(input_payload),
-                ensure_ascii=False,
-                indent=2,
+            built.text
+            + (
+                "\n\n【本轮输入】\n"
+                + __import__("json").dumps(
+                    _jsonable(input_payload),
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                if built.include_input
+                else ""
             )
             + "\n\n根据本轮输入完成上述职责。"
             + "只返回满足 JSON Schema 的 JSON。"

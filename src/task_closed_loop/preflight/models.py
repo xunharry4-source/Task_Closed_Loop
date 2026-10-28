@@ -16,6 +16,9 @@ class PreflightResourceRecord:
     resource_type: str
     source_identity: str
     payload: Any
+    # One line: what this is, what it holds now, how far along it is. Every step after
+    # Stage 2 reads this instead of the payload.
+    summary: str = ""
     provider_id: str = "preflight"
     availability: str = "available"
     revision: str | None = None
@@ -24,10 +27,17 @@ class PreflightResourceRecord:
 
 @dataclass
 class PreflightCapabilityRecord:
-    """Standard capability record produced by the preflight capability-analysis layer."""
+    """One record per configured function: its name and whether it is available.
+
+    Everything else is optional. An operation inventory, a scope or a schema would read
+    as the function's ceiling, and the task layer deliberately works from the name
+    alone.
+    """
 
     capability_id: str
-    action_type: str
+    action_type: str = ""
+    # Who made it and what kind of tool it is — never what it can do.
+    identity: str = ""
     provider_id: str = "preflight"
     description: str | None = None
     principal: str | None = None

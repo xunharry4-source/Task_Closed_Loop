@@ -199,7 +199,7 @@ class CodexCliLLM(GeminiLLM):
         schema: dict[str, Any] | None,
         correction: str = "",
     ) -> str:
-        prompt = self._role_prompt(role_key)
+        built = self._build_prompt(role_key, input_payload)
         # `schema` is supplied only when --output-schema cannot enforce it natively.
         schema_block = (
             "\n\n【输出 JSON Schema】\n"
@@ -209,9 +209,13 @@ class CodexCliLLM(GeminiLLM):
             else ""
         )
         return (
-            prompt
-            + "\n\n【本轮输入】\n"
-            + json.dumps(_jsonable(input_payload), ensure_ascii=False, indent=2)
+            built.text
+            + (
+                "\n\n【本轮输入】\n"
+                + json.dumps(_jsonable(input_payload), ensure_ascii=False, indent=2)
+                if built.include_input
+                else ""
+            )
             + schema_block
             + "\n\n根据本轮输入完成上述职责，直接给出符合约定结构的最终 JSON 结果。"
             + correction

@@ -72,6 +72,10 @@ _REQUIRED_FILES = (
     "project.yml",
     "capability_registry.yml",
     ".env",
+    # Host-owned unified interface: the entry and the two templates. They ship with the
+    # template and are filled in deterministically, never written by a CLI.
+    "analysis/main.py",
+    "analysis/templates.py",
 )
 
 
@@ -180,6 +184,38 @@ class ExecutionWorkspaceManager:
                 f"CLI Project 结构仍然不合格（{self.root}）：" + "；".join(problems)
             )
         return self.root
+
+    HOST_OWNED_FILES = ("analysis/main.py", "analysis/templates.py", "analysis/README.md")
+
+    def fill_host_owned_files(self, template: Path) -> list[str]:
+        """Install the Host-owned interface files: the entry and the two templates.
+
+        They define the interface between the Host and the analysis code, so the Host
+        provides them instead of asking a CLI to reinvent the entry every run. A
+        differing copy left over from before is superseded, not silently kept — but it
+        is moved aside as `<name>.superseded` rather than deleted. Analysis
+        implementations under `analysis/resources/` and `analysis/functions/` are never
+        touched.
+        """
+
+        template = Path(template)
+        filled: list[str] = []
+        for relative in self.HOST_OWNED_FILES:
+            source = template / relative
+            target = self.root / relative
+            if not source.is_file():
+                continue
+            wanted = source.read_bytes()
+            if target.exists():
+                if target.read_bytes() == wanted:
+                    continue
+                backup = target.with_suffix(target.suffix + ".superseded")
+                if not backup.exists():
+                    backup.write_bytes(target.read_bytes())
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(wanted)
+            filled.append(relative)
+        return filled
 
     def _copy_missing_template_files(self, template: Path) -> None:
         """Fill in files the template provides and this project is missing.

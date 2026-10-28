@@ -28,6 +28,13 @@ environment:
     llm.audit.adapter: AUDIT_LLM_ADAPTER
     llm.audit.model: AUDIT_LLM_MODEL
     llm.audit.temperature: AUDIT_LLM_TEMPERATURE
+    llm.openrouter.base_url: OPENROUTER_BASE_URL
+    llm.openrouter.timeout_seconds: OPENROUTER_TIMEOUT_SECONDS
+    llm.openrouter.max_tokens: OPENROUTER_MAX_TOKENS
+    llm.openrouter.api_key: OPENROUTER_API_KEY
+    llm.openrouter.referer: OPENROUTER_REFERER
+    llm.openrouter.title: OPENROUTER_TITLE
+    llm.openrouter.reasoning_effort: OPENROUTER_REASONING_EFFORT
     llm.openai.base_url: OPENAI_BASE_URL
     llm.openai.timeout_seconds: OPENAI_TIMEOUT_SECONDS
     llm.openai.max_tokens: OPENAI_MAX_TOKENS

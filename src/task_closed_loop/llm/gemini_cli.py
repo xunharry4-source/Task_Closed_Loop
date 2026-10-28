@@ -187,11 +187,15 @@ class GeminiCliLLM(GeminiLLM):
         schema: dict[str, Any],
         correction: str = "",
     ) -> str:
-        prompt = self._role_prompt(role_key)
+        built = self._build_prompt(role_key, input_payload)
         return (
-            prompt
-            + "\n\n【本轮输入】\n"
-            + json.dumps(_jsonable(input_payload), ensure_ascii=False, indent=2)
+            built.text
+            + (
+                "\n\n【本轮输入】\n"
+                + json.dumps(_jsonable(input_payload), ensure_ascii=False, indent=2)
+                if built.include_input
+                else ""
+            )
             + "\n\n【输出 JSON Schema】\n"
             + json.dumps(schema, ensure_ascii=False, indent=2)
             + "\n\n根据本轮输入完成上述职责。"

@@ -1,0 +1,31 @@
+# 这个文件分两部分：
+#   给用户看的：说明 / 变量          —— 系统完全不读，爱写多少写多少
+#   给系统用的：设置 / 提示词        —— 系统只读这两个
+#
+# 变量由系统提供（见 src/task_closed_loop/llm/prompt_template.py 的 VARIABLES），你只管用：
+# 把 {{变量名}} 放到提示词正文的任何位置，本轮的真实内容就替换在那个位置；
+# 调整它在正文里的位置，就等于调整提示词——替换照旧正确。
+角色: stage_io_contract
+说明: |
+  共享段：引用语法。被别的角色 includes 进去，自己不单独调用模型。
+变量: |
+  被 includes 进别人提示词里的共享段，自己不做变量替换。
+设置:
+  append_input: auto      # auto 默认（正文用了输入变量就不再追加【本轮输入】）/ always 总是追加 / never 从不追加
+
+提示词: |
+  # 引用语法
+
+  - `resource:<resource_id>`：资源。只给到简介时就只写 id，不要编字段路径；
+    要指具体内容就引 `reality:current#...`
+  - `reality:current[#字段路径]`：当前现实，身份固定写 `current`
+  - `task_outcome:<outcome_id>[#字段路径]`：已执行任务的结果
+  - `capability:<capability_id>`：功能，不带路径
+  - `task_outcomes` / `reality` 里 `subject_refs`、`evidence_refs`、`effect_refs` 的值：原样照抄
+
+  字段路径用 `#` 与身份分隔，`.键` 取字段、`[n]` 取下标；必须真实存在于你看到的那个对象里，Host 会逐级核对。
+
+  对：`resource:sales#payload.content_summary.columns[2]`、`reality:current#gaps[0]`
+  错：`current_resources[sales].payload.a`（按段名写路径）、`sales`（缺前缀）、`resource:sales.payload`（没用 #）
+
+  `about_object_refs` 只能是声明过的 subject_refs 原样，或 `resource:<resource_id>`，都不带路径。

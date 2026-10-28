@@ -1,3 +1,5 @@
+# 推理用哪个模型：默认就是第一步 config/preflight_sources.yml 里配的那个 cli。
+# 只有想让推理与第二步的分析用不同的东西时，才单独设 TASK_LLM_ADAPTER / AUDIT_LLM_ADAPTER。
 llm:
   task:
     adapter: ${TASK_LLM_ADAPTER}
@@ -45,7 +47,7 @@ llm:
     api_key: ${LMSTUDIO_API_KEY}
   roles:
     reality_builder: reality_builder
-    project_assignment: project_assignment
+    project_discovery: project_discovery
     problem_discovery: problem_discovery
     value_discovery: value_discovery
     demand_discovery: demand_discovery
@@ -54,6 +56,7 @@ llm:
     existing_task_continuity: existing_task_continuity
     task_discovery: task_discovery
     task_candidate_audit: task_candidate_destructive_audit
+    task_candidate_field_audit: task_candidate_field_audit
     task_candidate_set_audit: task_candidate_set_audit
     task_reality_validity: task_reality_validity
   openai:
@@ -61,6 +64,27 @@ llm:
     timeout_seconds: ${OPENAI_TIMEOUT_SECONDS:120}
     max_tokens: ${OPENAI_MAX_TOKENS}
     api_key: ${OPENAI_API_KEY}
+  # OpenRouter：一个 key 走很多家模型的网关（含 DeepSeek）。
+  # key 写进项目根目录的 .env：OPENROUTER_API_KEY=...（.env 已在 .gitignore 里）
+  # 模型名必须带厂商前缀，常用的 DeepSeek（2026-10 实时查到的在线型号）：
+  #   deepseek/deepseek-v4.1-flash   1M 上下文，便宜，日常生成/审核够用（默认）
+  #   deepseek/deepseek-v4-pro       1M 上下文，最强，审核想更严就用它
+  #   deepseek/deepseek-v3.2         163K 上下文，更省
+  # 用法（.env）：
+  #   TASK_LLM_ADAPTER=openrouter
+  #   TASK_LLM_MODEL=deepseek/deepseek-v4.1-flash
+  #   AUDIT_LLM_ADAPTER=openrouter
+  #   AUDIT_LLM_MODEL=deepseek/deepseek-v4-pro
+  openrouter:
+    base_url: ${OPENROUTER_BASE_URL:https://openrouter.ai/api/v1}
+    timeout_seconds: ${OPENROUTER_TIMEOUT_SECONDS:300}
+    max_tokens: ${OPENROUTER_MAX_TOKENS}
+    api_key: ${OPENROUTER_API_KEY}
+    # 可选：OpenRouter 后台用来区分来源的署名头，不填就不发
+    referer: ${OPENROUTER_REFERER}
+    title: ${OPENROUTER_TITLE:Task Closed Loop}
+    # 可选：low / medium / high；不填就不发 reasoning 字段
+    reasoning_effort: ${OPENROUTER_REASONING_EFFORT}
   deepseek:
     base_url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
     timeout_seconds: ${DEEPSEEK_TIMEOUT_SECONDS:120}

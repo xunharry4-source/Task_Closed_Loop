@@ -7,8 +7,12 @@ from task_closed_loop.capability_runtime.cli.base import CliEngineAdapter
 from task_closed_loop.contracts import ResourceCapabilityResult
 from task_closed_loop.implementations.cli_project import capability_project_config
 from task_closed_loop.llm.prompt_registry import PromptRegistry
+from task_closed_loop.cli_choice import configured_cli_engine
 from task_closed_loop.preflight.cli_preflight import (
+    ANALYZE_AUTO,
+    ANALYZE_NEVER,
     CliPreflightEngine,
+    analysis_mode,
     PreflightSourceConfigurationError,
     load_preflight_inputs,
 )
@@ -40,10 +44,10 @@ class CliResourceCapabilityAnalyzer:
             )
         if inputs.total_count == 0:
             raise PreflightSourceConfigurationError(
-                "Stage 2 没有配置任何 local_resources / remote_resources / functions。"
+                "第一步没有配置任何工作目录或功能：请在 config/preflight_sources.yml 的 "
+                "directories / functions 里至少写一项。"
             )
 
-        cli_cfg = section.get("cli") or {}
         capability_cfg = capability_project_config(self.config)
         prompt_text = PromptRegistry(
             self.project_root,
@@ -62,10 +66,19 @@ class CliResourceCapabilityAnalyzer:
                 )
             ),
         )
-        output = engine.materialize(
-            inputs,
-            explicit_engine=(str(cli_cfg.get("engine") or "").strip() or None),
-        )
+        # Step 2 initializes the data. It runs when the saved templates do not cover
+        # the configuration (or when asked to re-initialize), and is skipped otherwise.
+        mode = analysis_mode(self.config)
+        engine_choice = configured_cli_engine(self.config) or None
+        if mode == ANALYZE_NEVER:
+            output = engine.reuse_saved(inputs)
+        else:
+            # auto: initialize only what has no saved data yet. always: re-initialize all.
+            output = engine.materialize(
+                inputs,
+                explicit_engine=engine_choice,
+                reuse_saved=(mode == ANALYZE_AUTO),
+            )
         bundle = load_task_input_bundle(
             output.resources_path,
             output.capabilities_path,

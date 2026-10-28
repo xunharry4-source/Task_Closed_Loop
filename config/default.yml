@@ -7,7 +7,6 @@ runtime:
   - config/environment.yml
   - config/runtime.yml
   - config/task_inputs.yml
-  - config/projects.yml
   - config/preflight_sources.yml
   - config/task_store.yml
   - config/task_generation.yml

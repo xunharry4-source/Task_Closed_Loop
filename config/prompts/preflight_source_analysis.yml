@@ -1,0 +1,105 @@
+# 这个文件分两部分：
+#   给用户看的：说明 / 变量          —— 系统完全不读，爱写多少写多少
+#   给系统用的：设置 / 提示词        —— 系统只读这两个
+#
+# 变量由系统提供（见 src/task_closed_loop/llm/prompt_template.py 的 VARIABLES），你只管用：
+# 把 {{变量名}} 放到提示词正文的任何位置，本轮的真实内容就替换在那个位置；
+# 调整它在正文里的位置，就等于调整提示词——替换照旧正确。
+角色: preflight_source_analysis
+说明: |
+  第二步：让 CLI 在 cli_project/ 里写分析代码，真实读取配置的工作目录与功能，按两个模版填好结果。
+变量: |
+  这一段整段交给 CLI，没有"本轮输入"，因此不支持 {{变量名}}（写了会报错）。
+设置:
+  append_input: auto      # auto 默认（正文用了输入变量就不再追加【本轮输入】）/ always 总是追加 / never 从不追加
+
+提示词: |
+  # 资源与功能分析（初始化数据）
+
+  你在**长期存在的 `cli_project/` 工作目录**里工作。在这里创建或维护分析代码，真实读取
+  Host 给你的工作目录与功能，然后按下面两个模版返回结果。不要创建第二个项目。
+
+  Host 每次只交给你**一个**单元：一个工作目录，或一个功能。只分析、只报告这一个单元。
+
+  ## 只陈述事实
+
+  只写你实际观察到的东西。不推断原因、不做价值判断、不提建议、不预测。
+  发现异常、缺口、不一致时，如实写下现象本身（是什么、在哪个范围、多少量），不解释为什么。
+
+  需要凭据的功能：凭据在 `cli_project/.env` 里，按功能名找对应的 key；不要把它写进任何返回值、日志或代码。
+
+  ## 统一接口（Host 拥有，不要改）
+
+  `analysis/main.py`（入口）与 `analysis/templates.py`（两个模版）已经在项目里，**不要修改、不要重写**。
+
+  你要写的只有分析实现：
+
+  ```text
+  analysis/resources/<资源id>.py     def analyze(target, context) -> dict
+  analysis/functions/<功能名>.py      def analyze(target, context) -> dict
+  ```
+
+  - 文件名必须等于 Host 给的 id / 功能名；
+  - `target` 就是该单元的配置（资源：`{"id","kind","directory"}`；功能：`{"id"}`）；
+  - 返回值用 `templates.resource(...)` / `templates.capability(...)` 构造，不要手拼字典：
+
+  ```python
+  import templates
+
+  def analyze(target, context):
+      ...                      # 真实读取、真实调用
+      return templates.resource(
+          id=target["id"], type="local_directory",
+          summary="一句话：这是什么、现在有什么、到什么程度",
+          payload={...},
+      )
+  ```
+
+  已有实现增量维护，不要每轮推倒重建。写完可以自己手动验证：
+  `python analysis/main.py --directory <路径>` 或 `--function <功能名>`。
+
+  ## 两个模版（你的 `analyze()` 返回值）
+
+  入口会把各单元的返回值汇总成 `{"resources": [...], "capabilities": [...]}`，你只管返回自己这一条。
+
+  ### 资源模版（每个工作目录一条）
+
+  ```yaml
+  id: trading_data            # 等于 Host 给的 id
+  type: local_directory
+  summary: 一句话：这是什么、现在有什么、到什么程度
+  availability: available     # available / unavailable / failed
+  payload: {...}              # 观察到的内容，结构自由
+  metadata:
+    source_input_ids: [trading_data]
+  ```
+
+  `summary` 是后续所有步骤唯一会读的那句话，要让没见过这份数据的人读完就知道现在是什么情况：
+  有哪些数据/内容、关于什么的（例如有哪些股票的什么数据；小说写到第几卷、写的是什么）、
+  覆盖范围与最新到什么时候。只写事实，不堆明细。
+
+  `payload` 放观察到的结构、构成与内容，结构自由。**禁止**出现原始路径、URI、DSN、host/port、
+  connection string、密码、token 等连接信息——Host 会递归拒绝。
+
+  ### 功能模版（每个功能一条）
+
+  ```yaml
+  id: codex                   # 等于 Host 给的功能名，一个功能一条
+  identity: OpenAI 的编码代理命令行工具   # 只写身份：谁开发的、是什么类型的工具
+  availability: available     # 真实验证过才写 available；不能认证/无权限/报错写 unavailable 或 failed
+  metadata:
+    source_function_id: codex
+  ```
+
+  `identity` 只写**身份**一句话：谁开发的、是什么类型的工具（如「Google 的邮箱服务」）。
+  **不要写它能做什么**——不写能力/操作清单、不写支持的参数、不写适用场景、不写"可以用来…"。
+  下游模型本来就认识这些工具，不认识的会自己去查；写了能力反而会被当成这个功能的上限。
+
+  不要按操作拆成多条，不要列操作清单、作用域或输入结构。
+
+  ## 硬约束
+
+  - 不生成任务；
+  - 每个配置的工作目录与功能都必须出现，访问不了也要明确写 `unavailable` / `failed`，不能静默遗漏；
+  - `availability` 必须显式；
+  - 两个模版的字段固定，不要增删顶层字段。

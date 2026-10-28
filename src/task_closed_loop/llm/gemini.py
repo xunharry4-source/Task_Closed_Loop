@@ -16,12 +16,14 @@ from task_closed_loop.model_io import (
     to_model_schema,
 )
 from task_closed_loop.llm.prompt_registry import PromptRegistry
+from task_closed_loop.llm.prompt_template import build_role_prompt
 from task_closed_loop.llm import skill_chain_io
 from task_closed_loop.llm.prompt_cache import PromptRequestCache
 from task_closed_loop.reality.models import RealitySnapshot
 from task_closed_loop.tasks.generation_models import (
     CandidateFailureContext,
     CandidateFieldRepair,
+    CandidateFieldReview,
     CoverageDimension,
     DiscoverySignal,
     TaskOutcomeRecord,
@@ -168,15 +170,22 @@ class GeminiLLM:
                 f"Gemini Client 初始化失败：{exc}"
             ) from exc
 
-    def _role_prompt(
+    def _build_prompt(
         self,
         role_key: str,
-    ) -> str:
-        prompt_name = self.roles.get(
-            role_key,
-            role_key,
+        input_payload: dict[str, Any],
+    ):
+        """提示词（内置或用户自己写的）+ `{{变量名}}` 替换。
+
+        模板自己写了输入，`include_input` 就是 False，Host 不再追加【本轮输入】。
+        """
+
+        prompt_name = self.roles.get(role_key, role_key)
+        return build_role_prompt(
+            self.prompts.template(prompt_name),
+            role_key=role_key,
+            payload=_jsonable(input_payload),
         )
-        return self.prompts.get(prompt_name)
 
     def _create_interaction(
         self,
@@ -185,14 +194,18 @@ class GeminiLLM:
         input_payload: dict[str, Any],
         schema: dict[str, Any],
     ):
-        prompt = self._role_prompt(role_key)
+        built = self._build_prompt(role_key, input_payload)
         input_text = (
-            prompt
-            + "\n\n【本轮输入】\n"
-            + json.dumps(
-                _jsonable(input_payload),
-                ensure_ascii=False,
-                indent=2,
+            built.text
+            + (
+                "\n\n【本轮输入】\n"
+                + json.dumps(
+                    _jsonable(input_payload),
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                if built.include_input
+                else ""
             )
             + "\n\n根据本轮输入完成上述职责。"
             + "输出由 response_format 约束为 JSON。"
@@ -1130,16 +1143,12 @@ class GeminiLLM:
         schema = _object_schema(
             {
                 "core_valid": {"type": "boolean"},
-                "repair_required": {"type": "boolean"},
-                "field_issues": _STRING_ARRAY,
                 "challenge": {"type": "string"},
                 "evidence": _STRING_ARRAY,
                 "reason": {"type": "string"},
             },
             [
                 "core_valid",
-                "repair_required",
-                "field_issues",
                 "challenge",
                 "evidence",
                 "reason",
@@ -1159,6 +1168,51 @@ class GeminiLLM:
         return CandidateReview(
             candidate_id=candidate.candidate_id,
             keep=bool(parsed.get("core_valid")),
+            challenge=str(parsed.get("challenge") or ""),
+            evidence=tuple(
+                str(value)
+                for value in (parsed.get("evidence") or [])
+            ),
+            reason=str(parsed.get("reason") or ""),
+        )
+
+    async def review_candidate_fields(
+        self,
+        resources,
+        reality,
+        candidate,
+        existing_tasks,
+        capabilities,
+    ):
+        schema = _object_schema(
+            {
+                "repair_required": {"type": "boolean"},
+                "field_issues": _STRING_ARRAY,
+                "challenge": {"type": "string"},
+                "evidence": _STRING_ARRAY,
+                "reason": {"type": "string"},
+            },
+            [
+                "repair_required",
+                "field_issues",
+                "challenge",
+                "evidence",
+                "reason",
+            ],
+        )
+        parsed = await self._interaction_json(
+            role_key="task_candidate_field_audit",
+            input_payload={
+                "current_resources": resources,
+                "current_reality": reality,
+                "candidate": candidate,
+                "effective_existing_tasks": existing_tasks,
+                "current_capabilities": capabilities,
+            },
+            schema=schema,
+        )
+        return CandidateFieldReview(
+            candidate_id=candidate.candidate_id,
             repair_required=bool(parsed.get("repair_required")),
             field_issues=tuple(
                 str(value)
@@ -1302,7 +1356,6 @@ class GeminiLLM:
             role_key="task_reality_validity",
             input_payload={
                 "current_resources": resources,
-                "current_reality": reality,
                 "current_capabilities": capabilities,
                 "task": task,
             },
@@ -1332,6 +1385,18 @@ class GeminiLLM:
 
     # ---- first-step chain: project -> problem / value / demand -> task ----
 
+    async def discover_projects(self, resources, capabilities, known_projects):
+        parsed = await self._interaction_json(
+            role_key="project_discovery",
+            input_payload={
+                "current_resources": resources,
+                "current_capabilities": capabilities,
+                "known_projects": list(known_projects or []),
+            },
+            schema=skill_chain_io.PROJECT_SCHEMA,
+        )
+        return skill_chain_io.projects_from_payload(parsed)
+
     async def assign_resources_to_projects(self, projects, resources, reality):
         parsed = await self._interaction_json(
             role_key="project_assignment",
@@ -1345,14 +1410,13 @@ class GeminiLLM:
         return skill_chain_io.assignments_from_payload(parsed)
 
     async def discover_project_problems(
-        self, project, resources, reality, capabilities, existing_tasks
+        self, project, resources, capabilities, existing_tasks
     ):
         parsed = await self._interaction_json(
             role_key="problem_discovery",
             input_payload={
                 "project": project,
                 "current_resources": resources,
-                "current_reality": reality,
                 "current_capabilities": capabilities,
                 "effective_existing_tasks": existing_tasks,
             },
@@ -1361,14 +1425,13 @@ class GeminiLLM:
         return skill_chain_io.problems_from_payload(parsed)
 
     async def discover_project_values(
-        self, project, resources, reality, capabilities, existing_tasks
+        self, project, resources, capabilities, existing_tasks
     ):
         parsed = await self._interaction_json(
             role_key="value_discovery",
             input_payload={
                 "project": project,
                 "current_resources": resources,
-                "current_reality": reality,
                 "current_capabilities": capabilities,
                 "effective_existing_tasks": existing_tasks,
             },
@@ -1377,14 +1440,13 @@ class GeminiLLM:
         return skill_chain_io.values_from_payload(parsed)
 
     async def discover_project_demands(
-        self, project, resources, reality, capabilities
+        self, project, resources, capabilities
     ):
         parsed = await self._interaction_json(
             role_key="demand_discovery",
             input_payload={
                 "project": project,
                 "current_resources": resources,
-                "current_reality": reality,
                 "current_capabilities": capabilities,
             },
             schema=skill_chain_io.DEMANDS_SCHEMA,
@@ -1395,8 +1457,10 @@ class GeminiLLM:
         self,
         project,
         resources,
-        reality,
         capabilities,
+        problems,
+        values,
+        demands,
         fixed_themes,
         previous_theme_yield,
     ):
@@ -1405,8 +1469,10 @@ class GeminiLLM:
             input_payload={
                 "project": project,
                 "current_resources": resources,
-                "current_reality": reality,
                 "current_capabilities": capabilities,
+                "problems": problems,
+                "value_opportunities": values,
+                "capability_voids": demands,
                 "fixed_themes": list(fixed_themes),
                 "previous_theme_yield": dict(previous_theme_yield or {}),
             },
@@ -1421,13 +1487,8 @@ class GeminiLLM:
         theme_kind,
         theme_instruction,
         resource_info,
-        capability_info,
         resources,
-        reality,
         capabilities,
-        problems,
-        values,
-        demands,
         existing_tasks,
     ):
         parsed = await self._interaction_json(
@@ -1438,13 +1499,8 @@ class GeminiLLM:
                 "theme_kind": theme_kind,
                 "theme_instruction": theme_instruction,
                 "resource_info": resource_info,
-                "capability_info": capability_info,
                 "current_resources": resources,
-                "current_reality": reality,
                 "current_capabilities": capabilities,
-                "problems": problems,
-                "value_opportunities": values,
-                "capability_voids": demands,
                 "effective_existing_tasks": existing_tasks,
             },
             schema=skill_chain_io.THEME_TASKS_SCHEMA,

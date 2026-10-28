@@ -21,6 +21,7 @@ from task_closed_loop.tasks.generation_audit import (
 )
 from task_closed_loop.tasks.generation_models import (
     CandidateFailureContext,
+    CandidateReview,
     DiscoverySignal,
     TaskGenerationResult,
     TaskGenerationTrace,
@@ -796,7 +797,7 @@ class TaskGenerationEngine:
                 accepted.append(candidate)
                 continue
 
-            semantic = (
+            core = (
                 await self._audit_reasoner
                 .destructive_review_candidate(
                     resources=resources,
@@ -808,28 +809,49 @@ class TaskGenerationEngine:
                     capabilities=capabilities,
                 )
             )
-            trace.candidate_reviews.append(
-                semantic
-            )
+            trace.candidate_reviews.append(core)
 
-            if not semantic.core_valid:
+            if not core.core_valid:
                 trace.rejected_candidate_contexts.append(
                     self._failure_context(
                         candidate=candidate,
                         stage="core_reject",
-                        reason=semantic.reason,
-                        field_issues=(
-                            semantic.field_issues
-                        ),
+                        reason=core.reason,
                     )
                 )
                 continue
 
+            field = (
+                await self._audit_reasoner
+                .review_candidate_fields(
+                    resources=resources,
+                    reality=reality,
+                    candidate=candidate,
+                    existing_tasks=(
+                        existing_tasks
+                    ),
+                    capabilities=capabilities,
+                )
+            )
+            # Keep one combined review in the trace so downstream
+            # readers still see keep + field issues together.
+            trace.candidate_reviews.append(
+                CandidateReview(
+                    candidate_id=candidate.candidate_id,
+                    keep=True,
+                    challenge=field.challenge,
+                    evidence=field.evidence,
+                    reason=field.reason,
+                    repair_required=field.repair_required,
+                    field_issues=field.field_issues,
+                )
+            )
+
             current = candidate
 
             if (
-                semantic.repair_required
-                or semantic.field_issues
+                field.repair_required
+                or field.field_issues
             ):
                 repair = getattr(
                     self._task_reasoner,
@@ -846,12 +868,12 @@ class TaskGenerationEngine:
                             capabilities=capabilities,
                             candidate=current,
                             field_issues=list(
-                                semantic.field_issues
+                                field.field_issues
                             ),
                         )
                     except Exception as exc:
                         issues = list(
-                            semantic.field_issues
+                            field.field_issues
                         )
                         issues.append(
                             "Field repair failed: "
@@ -916,9 +938,10 @@ class TaskGenerationEngine:
                         )
                         continue
 
-                    repaired_review = (
+                    # Core already passed; only re-check field quality.
+                    repaired_field = (
                         await self._audit_reasoner
-                        .destructive_review_candidate(
+                        .review_candidate_fields(
                             resources=resources,
                             reality=reality,
                             candidate=current,
@@ -929,33 +952,29 @@ class TaskGenerationEngine:
                         )
                     )
                     trace.candidate_reviews.append(
-                        repaired_review
+                        CandidateReview(
+                            candidate_id=current.candidate_id,
+                            keep=True,
+                            challenge=repaired_field.challenge,
+                            evidence=repaired_field.evidence,
+                            reason=repaired_field.reason,
+                            repair_required=(
+                                repaired_field.repair_required
+                            ),
+                            field_issues=(
+                                repaired_field.field_issues
+                            ),
+                        )
                     )
 
-                    if not repaired_review.core_valid:
-                        trace.rejected_candidate_contexts.append(
-                            self._failure_context(
-                                candidate=current,
-                                stage="repair_core_reject",
-                                reason=(
-                                    repaired_review.reason
-                                ),
-                                field_issues=(
-                                    repaired_review
-                                    .field_issues
-                                ),
-                            )
-                        )
-                        continue
-
                     if (
-                        repaired_review.repair_required
-                        or repaired_review.field_issues
+                        repaired_field.repair_required
+                        or repaired_field.field_issues
                     ):
                         trace.unresolved_field_issues[
                             current.candidate_id
                         ] = list(
-                            repaired_review.field_issues
+                            repaired_field.field_issues
                         )
                 else:
                     # A field-quality problem does not invalidate
@@ -963,7 +982,7 @@ class TaskGenerationEngine:
                     trace.unresolved_field_issues[
                         current.candidate_id
                     ] = list(
-                        semantic.field_issues
+                        field.field_issues
                     )
 
             accepted.append(current)

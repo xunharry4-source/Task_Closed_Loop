@@ -21,8 +21,7 @@ from task_closed_loop.implementations.task_generation.skill_chain import (
 )
 from task_closed_loop.implementations.task_runtime import LazyTaskRuntimeProvider
 from task_closed_loop.pipeline import LockedProductionPipeline
-from task_closed_loop.projects.assignment import resolve_resource_assignment
-from task_closed_loop.projects.config import load_project_bindings
+from task_closed_loop.projects.discovery import discover_project_set
 from task_closed_loop.store.task_store import iso_week, open_task_store
 from task_closed_loop.tasks.skill_chain_models import Project, ProjectScope
 
@@ -57,12 +56,11 @@ class ProjectPipeline:
 
 @dataclass
 class ProjectChainRun:
-    bindings: object
     cache: ProjectStage2Cache
     store: object
     week: str
     items: list[ProjectPipeline]
-    assignment: object = None
+    project_set: object = None
 
 
 def first_step_mode(config: dict) -> str:
@@ -89,10 +87,9 @@ async def build_project_chain_run(
 
     root = Path(project_root).resolve()
     cli_root = cli_project_root(config, root).resolve()
-    bindings = load_project_bindings(config)
     store = open_task_store(config)
     week = iso_week()
-    cache = ProjectStage2Cache(bindings=bindings, logger=logger)
+    cache = ProjectStage2Cache(logger=logger)
     provider = LazyTaskRuntimeProvider(
         config=config, project_root=root, minimum_tasks=minimum_tasks
     )
@@ -105,15 +102,15 @@ async def build_project_chain_run(
     cache.materialize(base_analyzer, cli_project.root)
 
     components = await provider.validate_task()
-    assignment = await resolve_resource_assignment(
+    # Step 3: the projects come out of the resources themselves.
+    project_set = await discover_project_set(
         reasoner=components.task_llm,
-        bindings=bindings,
         resource_briefs=cache.resolver.resource_briefs(cache.materialized.resources),
-        resource_inputs=cache.resolver.resource_inputs(),
+        function_names=cache.resolver.capability_names(cache.materialized.capabilities),
         state_dir=Path(cli_project.root) / "state",
         logger=logger,
     )
-    scopes = cache.apply_assignment(assignment)
+    scopes = cache.apply_projects(project_set)
     owning_projects = [scope.project for scope in scopes]
     multi = len(owning_projects) > 1
 
@@ -159,12 +156,11 @@ async def build_project_chain_run(
         )
 
     return ProjectChainRun(
-        bindings=bindings,
         cache=cache,
         store=store,
         week=week,
         items=items,
-        assignment=assignment,
+        project_set=project_set,
     )
 
 
